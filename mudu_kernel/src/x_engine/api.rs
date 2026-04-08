@@ -5,47 +5,54 @@ use std::sync::Arc;
 use crate::contract::schema_table::SchemaTable;
 use crate::x_engine::dat_bin::DatBin;
 use crate::x_engine::operator::Operator;
-use mudu::common::id::OID;
+use mudu::common::id::{AttrIndex, OID};
 use mudu::common::result::RS;
 use mudu::common::xid::XID;
 use mudu_contract::tuple::tuple_field::TupleField;
 
 pub type TupleRow = TupleField;
 
-/// Result set cursor
+/// Asynchronous cursor over a result set produced by [`XContract::read_range`].
 #[async_trait]
 pub trait RSCursor: Send + Sync {
+    /// Returns the next projected row, or `None` when the cursor is exhausted.
     async fn next(&self) -> RS<Option<TupleRow>>;
 }
 
 pub type Filter = Operator;
 
-/// object id and datum
+/// A compact row fragment keyed by attribute index.
+///
+/// The contract uses this type for exact-key predicates, inserted key/value
+/// columns, and update payloads. Each pair is `(attribute_index, binary_value)`.
 #[derive(Clone, Default, Debug)]
 pub struct VecDatum {
-    data: Vec<(OID, DatBin)>,
+    data: Vec<(AttrIndex, DatBin)>,
 }
 
-/// range data
+/// Key-range bounds used by [`XContract::read_range`].
+///
+/// Bounds are expressed over the same `(attribute_index, binary_value)` shape as
+/// [`VecDatum`], but allow inclusive, exclusive, or unbounded range scans.
 #[derive(Clone)]
 pub struct RangeData {
-    start: Bound<Vec<(OID, DatBin)>>,
-    end: Bound<Vec<(OID, DatBin)>>,
+    start: Bound<Vec<(AttrIndex, DatBin)>>,
+    end: Bound<Vec<(AttrIndex, DatBin)>>,
 }
 
-/// select term list
+/// Projection list for read operations.
 #[derive(Clone, Debug)]
 pub struct VecSelTerm {
-    vec: Vec<OID>,
+    vec: Vec<AttrIndex>,
 }
 
-/// predicate for non-primary-key
+/// Predicate over non-key columns.
 #[derive(Clone, Debug)]
 pub enum Predicate {
     /// conjunctive normal form, it is a conjunction of disjunctions of literals
-    CNF(Vec<Vec<(OID, Filter)>>),
+    CNF(Vec<Vec<(AttrIndex, Filter)>>),
     /// disjunctive normal form, it is a disjunction of conjunctions of literals
-    DNF(Vec<Vec<(OID, Filter)>>),
+    DNF(Vec<Vec<(AttrIndex, Filter)>>),
 }
 
 /// alter table parameter
@@ -75,33 +82,45 @@ pub struct OptInsert {}
 pub struct OptDelete {}
 
 ///////////////////////////////////////////////////////////////////////////////
-/// MKI trait
+/// Transactional relational execution interface used by the kernel.
 ///
-/// A trait of XContract interface, which is a transaction processing abstraction on relational model
-/// All the tables, columns, types, transactions etc. are reference by a unique and immutable object
-/// id, [`OID`]
+/// [`XContract`] is the storage-facing contract behind SQL execution and the
+/// worker-local runtime. All stable schema objects are addressed by immutable
+/// object identifiers such as [`OID`], while each write/read statement is
+/// executed inside a transaction identified by [`XID`].
 ///
+/// Conventions:
+/// - `table_id` always identifies the target table by OID.
+/// - `pred_key` carries exact primary-key components for point operations.
+/// - `pred_non_key` refines the operation with additional non-key predicates.
+/// - `select` lists projected columns for read operations.
+/// - row-count return values report how many visible rows were affected.
 #[async_trait]
 pub trait XContract: Send + Sync {
-    /// create a table, which is described by `schema`
+    /// Creates a table described by `schema`.
+    ///
+    /// `xid` is accepted for interface uniformity; implementations may treat
+    /// DDL as autocommit if transactional DDL is not supported.
     async fn create_table(&self, xid: XID, schema: &SchemaTable) -> RS<()>;
 
-    /// drop a table specified by its OID
+    /// Drops the table identified by `oid`.
     async fn drop_table(&self, xid: XID, oid: OID) -> RS<()>;
 
-    /// alter table
+    /// Applies an alter-table operation to the target table.
     async fn alter_table(&self, xid: XID, oid: OID, alter_table: &AlterTable) -> RS<()>;
 
-    /// start a transaction
+    /// Starts a new transaction and returns its transaction id.
     async fn begin_tx(&self) -> RS<XID>;
 
-    /// commit a transaction specified by its XID
+    /// Commits the transaction identified by `xid`.
     async fn commit_tx(&self, xid: XID) -> RS<()>;
 
-    /// abort a transaction specified by its XID
+    /// Aborts the transaction identified by `xid`.
     async fn abort_tx(&self, xid: XID) -> RS<()>;
 
-    /// update by a collection of predicate
+    /// Updates rows that match the provided key and non-key predicates.
+    ///
+    /// Returns the number of visible rows updated.
     async fn update(
         &self,
         xid: XID,
@@ -112,7 +131,9 @@ pub trait XContract: Send + Sync {
         opt_update: &OptUpdate,
     ) -> RS<usize>;
 
-    /// read by a exact key
+    /// Reads one row by exact key.
+    ///
+    /// Returns `None` when the key is not visible in the transaction snapshot.
     async fn read_key(
         &self,
         xid: XID,
@@ -122,7 +143,10 @@ pub trait XContract: Send + Sync {
         opt_read: &OptRead,
     ) -> RS<Option<Vec<DatBin>>>;
 
-    /// read by a collection of predicate
+    /// Reads rows from a key range plus optional non-key predicates.
+    ///
+    /// The returned cursor yields projected rows in the implementation-defined
+    /// order of the range scan.
     async fn read_range(
         &self,
         xid: XID,
@@ -133,7 +157,9 @@ pub trait XContract: Send + Sync {
         opt_read: &OptRead,
     ) -> RS<Arc<dyn RSCursor>>;
 
-    /// delete by a collection of predicate
+    /// Deletes rows that match the provided key and non-key predicates.
+    ///
+    /// Returns the number of visible rows deleted.
     async fn delete(
         &self,
         xid: XID,
@@ -143,7 +169,7 @@ pub trait XContract: Send + Sync {
         opt_delete: &OptDelete,
     ) -> RS<usize>;
 
-    /// insert a row
+    /// Inserts one row identified by `keys` with payload columns from `values`.
     async fn insert(
         &self,
         xid: XID,
@@ -155,7 +181,7 @@ pub trait XContract: Send + Sync {
 }
 
 impl VecDatum {
-    pub fn new(data: Vec<(OID, DatBin)>) -> Self {
+    pub fn new(data: Vec<(AttrIndex, DatBin)>) -> Self {
         Self { data }
     }
 
@@ -163,21 +189,38 @@ impl VecDatum {
         std::mem::swap(&mut self.data, &mut other.data);
     }
 
-    pub fn data(&self) -> &Vec<(OID, DatBin)> {
+    pub fn data(&self) -> &Vec<(AttrIndex, DatBin)> {
         &self.data
     }
 
-    pub fn into_data(self) -> Vec<(OID, DatBin)> {
+    pub fn into_data(self) -> Vec<(AttrIndex, DatBin)> {
         self.data
     }
 }
 
+impl RangeData {
+    pub fn new(
+        start: Bound<Vec<(AttrIndex, DatBin)>>,
+        end: Bound<Vec<(AttrIndex, DatBin)>>,
+    ) -> Self {
+        Self { start, end }
+    }
+
+    pub fn start(&self) -> &Bound<Vec<(AttrIndex, DatBin)>> {
+        &self.start
+    }
+
+    pub fn end(&self) -> &Bound<Vec<(AttrIndex, DatBin)>> {
+        &self.end
+    }
+}
+
 impl VecSelTerm {
-    pub fn new(proj_list: Vec<OID>) -> Self {
+    pub fn new(proj_list: Vec<AttrIndex>) -> Self {
         Self { vec: proj_list }
     }
 
-    pub fn vec(&self) -> &Vec<OID> {
+    pub fn vec(&self) -> &Vec<AttrIndex> {
         &self.vec
     }
 }

@@ -1,6 +1,6 @@
 # Add wasm32 target
 
-    rustup target add wasm32-wasip1
+    rustup target add wasm32-wasip2
 
 ## Notice
 
@@ -17,10 +17,9 @@ When compile with wasm32-unknown-unknown, wasm-time runtime would complain error
 
 # Build wasm32 target
 
-    cargo build --target wasm32-wasip1
+    cargo build --target wasm32-wasip2
 
 If no wasm32 target, it would complain:
 
     error[E0463]: can't find crate for `core`
-
 

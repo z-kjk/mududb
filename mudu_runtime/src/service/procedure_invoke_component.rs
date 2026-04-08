@@ -1,6 +1,6 @@
 use crate::procedure::procedure::Procedure;
 use crate::service::runtime_opt::ComponentTarget;
-use crate::service::wasi_context_component::{WasiContextComponent, build_wasi_component_context};
+use crate::service::wasi_context_component::{build_wasi_component_context, WasiContextComponent};
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
@@ -8,11 +8,10 @@ use mudu::utils::case_convert::to_kebab_case;
 use mudu_binding::procedure::procedure_invoke;
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use std::sync::Mutex;
-use std::thread;
-use wasmtime::Store;
 use wasmtime::component::{InstancePre, TypedFunc};
+use wasmtime::Store;
 
 pub struct ProcedureInvokeComponent {
     inner: Mutex<ProcedureInvokeInner>,
@@ -83,10 +82,10 @@ impl ProcedureInvokeComponent {
         let inner: ProcedureInvokeInner = inner
             .into_inner()
             .map_err(|e| m_error!(EC::MuduError, "mutex into inner error", e))?;
-        let thread = thread::spawn(move || {
+        let thread = mudu_sys::task::spawn_thread(move || {
             let ret = inner.invoke(param);
             ret
-        });
+        })?;
         let result = thread
             .join()
             .map_err(|_e| m_error!(EC::MuduError, "invoke thread join error"))?;

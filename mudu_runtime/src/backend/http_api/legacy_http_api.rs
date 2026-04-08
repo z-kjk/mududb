@@ -1,6 +1,6 @@
 use super::{
-    HttpApi, legacy_invoke_async_proc, legacy_invoke_sync_proc, parse_json_object_body,
-    runtime_get_app_and_desc,
+    legacy_invoke_async_proc, legacy_invoke_sync_proc, parse_json_object_body,
+    runtime_get_app_and_desc, HttpApi,
 };
 use crate::service::runtime::Runtime;
 use async_trait::async_trait;

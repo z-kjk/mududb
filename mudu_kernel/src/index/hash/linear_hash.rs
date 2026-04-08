@@ -4,8 +4,9 @@ use mudu::m_error;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+
+use crate::io::file::{self, IoFile};
+use crate::io::worker_ring;
 use tokio::sync::{Mutex, MutexGuard};
 
 pub const META_FILE_NAME: &str = "linear_hash.meta.json";
@@ -14,6 +15,7 @@ pub const PAGE_FILE_NAME: &str = "linear_hash.pages";
 const META_VERSION: u32 = 1;
 const PAGE_HEADER_SIZE: usize = 16;
 const NONE_PAGE_ID: u64 = u64::MAX;
+const FILE_MODE_644: u32 = 0o644;
 
 #[derive(Debug, Clone)]
 pub struct LinearHashConfig {
@@ -110,7 +112,7 @@ impl LinearHash {
                     "linear hash files not found and create_if_missing=false"
                 ));
             }
-            fs::create_dir_all(&dir)
+            tokio::fs::create_dir_all(&dir)
                 .await
                 .map_err(|e| m_error!(ER::IOErr, "create index dir error", e))?;
             return Self::create_new(dir, config).await;
@@ -440,14 +442,8 @@ impl LinearHash {
     async fn create_new(dir: PathBuf, config: LinearHashConfig) -> RS<Self> {
         let page_path = dir.join(PAGE_FILE_NAME);
         let meta_path = dir.join(META_FILE_NAME);
-        let _file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(&page_path)
-            .await
-            .map_err(|e| m_error!(ER::IOErr, "create page file error", e))?;
+        let page_file = open_rw_create_truncate(&page_path).await?;
+        close_file(page_file).await?;
 
         let initial_buckets = config.initial_buckets.max(1);
         let level = initial_buckets.trailing_zeros();
@@ -485,11 +481,13 @@ impl LinearHash {
             total_entries: 0,
         };
 
-        let content = serde_json::to_vec_pretty(&meta)
-            .map_err(|e| m_error!(ER::EncodeErr, "encode meta error", e))?;
-        fs::write(&meta_path, content)
-            .await
-            .map_err(|e| m_error!(ER::IOErr, "write meta file error", e))?;
+        write_all_file(
+            &meta_path,
+            &serde_json::to_vec_pretty(&meta)
+                .map_err(|e| m_error!(ER::EncodeErr, "encode meta error", e))?,
+            true,
+        )
+        .await?;
 
         let bucket_locks = (0..meta.bucket_page_ids.len())
             .map(|_| Arc::new(Mutex::new(())))
@@ -529,18 +527,18 @@ impl LinearHash {
     }
 
     async fn write_meta_file(&self, path: &Path, meta: &LinearHashMeta) -> RS<()> {
-        let content = serde_json::to_vec_pretty(meta)
-            .map_err(|e| m_error!(ER::EncodeErr, "encode meta error", e))?;
-        fs::write(path, content)
-            .await
-            .map_err(|e| m_error!(ER::IOErr, "write meta file error", e))?;
+        write_all_file(
+            path,
+            &serde_json::to_vec_pretty(meta)
+                .map_err(|e| m_error!(ER::EncodeErr, "encode meta error", e))?,
+            true,
+        )
+        .await?;
         Ok(())
     }
 
     async fn read_meta(path: &Path) -> RS<LinearHashMeta> {
-        let buf = fs::read(path)
-            .await
-            .map_err(|e| m_error!(ER::IOErr, "read meta file error", e))?;
+        let buf = read_all_file(path).await?;
         serde_json::from_slice(&buf)
             .map_err(|e| m_error!(ER::DecodeErr, "decode meta file error", e))
     }
@@ -590,18 +588,16 @@ async fn read_page_data(
     value_size: usize,
     bucket_capacity: usize,
 ) -> RS<BucketPage> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(page_path)
-        .await
-        .map_err(|e| m_error!(ER::IOErr, "open page file error", e))?;
-
-    let mut buf = vec![0; page_size];
-    seek_page(&mut file, page_id, page_size).await?;
-    file.read_exact(&mut buf)
-        .await
-        .map_err(|e| m_error!(ER::IOErr, "read page error", e))?;
+    let file = open_rw(page_path).await?;
+    let offset = page_offset(page_id, page_size)?;
+    let read_result = if worker_ring::has_current_worker_ring() {
+        file::read(&file, page_size, offset).await
+    } else {
+        file::read_sync(&file, page_size, offset)
+    };
+    let close_result = close_file(file).await;
+    let buf = read_result.map_err(|e| m_error!(ER::IOErr, "read page error", e))?;
+    close_result?;
 
     let next = read_u64(&buf[0..8]);
     let count = read_u32(&buf[8..12]) as usize;
@@ -653,13 +649,6 @@ async fn write_page_data(
         ));
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(page_path)
-        .await
-        .map_err(|e| m_error!(ER::IOErr, "open page file error", e))?;
-
     let mut buf = vec![0u8; page_size];
     write_u64(&mut buf[0..8], page.next_page_id.unwrap_or(NONE_PAGE_ID));
     write_u32(&mut buf[8..12], page.entries.len() as u32);
@@ -678,24 +667,101 @@ async fn write_page_data(
         offset += value_size;
     }
 
-    seek_page(&mut file, page_id, page_size).await?;
-    file.write_all(&buf)
-        .await
-        .map_err(|e| m_error!(ER::IOErr, "write page error", e))?;
-    file.flush()
-        .await
-        .map_err(|e| m_error!(ER::IOErr, "flush page file error", e))?;
+    let file = open_rw(page_path).await?;
+    let offset = page_offset(page_id, page_size)?;
+    let write_result = if worker_ring::has_current_worker_ring() {
+        file::write(&file, buf, offset).await.map(|_| ())
+    } else {
+        file::write_sync(&file, &buf, offset)
+    };
+    let flush_result = if worker_ring::has_current_worker_ring() {
+        file::flush(&file).await
+    } else {
+        file::flush_sync(&file)
+    };
+    let close_result = close_file(file).await;
+    write_result.map_err(|e| m_error!(ER::IOErr, "write page error", e))?;
+    flush_result.map_err(|e| m_error!(ER::IOErr, "flush page file error", e))?;
+    close_result?;
     Ok(())
 }
 
-async fn seek_page(file: &mut tokio::fs::File, page_id: u64, page_size: usize) -> RS<()> {
-    let offset = page_id
-        .checked_mul(page_size as u64)
-        .ok_or_else(|| m_error!(ER::IndexOutOfRange, "page seek overflow"))?;
-    file.seek(SeekFrom::Start(offset))
+async fn open_rw(path: &Path) -> RS<IoFile> {
+    if worker_ring::has_current_worker_ring() {
+        file::open(path, libc::O_RDWR | file::cloexec_flag(), FILE_MODE_644).await
+    } else {
+        file::open_sync(path, libc::O_RDWR | file::cloexec_flag(), FILE_MODE_644)
+    }
+}
+
+async fn open_rw_create_truncate(path: &Path) -> RS<IoFile> {
+    if worker_ring::has_current_worker_ring() {
+        file::open(
+            path,
+            libc::O_CREAT | libc::O_TRUNC | libc::O_RDWR | file::cloexec_flag(),
+            FILE_MODE_644,
+        )
         .await
-        .map_err(|e| m_error!(ER::IOErr, "seek page error", e))?;
+    } else {
+        file::open_sync(
+            path,
+            libc::O_CREAT | libc::O_TRUNC | libc::O_RDWR | file::cloexec_flag(),
+            FILE_MODE_644,
+        )
+    }
+}
+
+async fn read_all_file(path: &Path) -> RS<Vec<u8>> {
+    let file = open_rw(path).await?;
+    let len = std::fs::metadata(path)
+        .map_err(|e| m_error!(ER::IOErr, "read meta file metadata error", e))?
+        .len() as usize;
+    let read_result = if worker_ring::has_current_worker_ring() {
+        file::read(&file, len, 0).await
+    } else {
+        file::read_sync(&file, len, 0)
+    };
+    let close_result = close_file(file).await;
+    let buf = read_result.map_err(|e| m_error!(ER::IOErr, "read meta file error", e))?;
+    close_result?;
+    Ok(buf)
+}
+
+async fn write_all_file(path: &Path, buf: &[u8], truncate: bool) -> RS<()> {
+    let file = if truncate {
+        open_rw_create_truncate(path).await?
+    } else {
+        open_rw(path).await?
+    };
+    let write_result = if worker_ring::has_current_worker_ring() {
+        file::write(&file, buf.to_vec(), 0).await.map(|_| ())
+    } else {
+        file::write_sync(&file, buf, 0)
+    };
+    let flush_result = if worker_ring::has_current_worker_ring() {
+        file::flush(&file).await
+    } else {
+        file::flush_sync(&file)
+    };
+    let close_result = close_file(file).await;
+    write_result.map_err(|e| m_error!(ER::IOErr, "write meta file error", e))?;
+    flush_result.map_err(|e| m_error!(ER::IOErr, "flush meta file error", e))?;
+    close_result?;
     Ok(())
+}
+
+fn page_offset(page_id: u64, page_size: usize) -> RS<u64> {
+    page_id
+        .checked_mul(page_size as u64)
+        .ok_or_else(|| m_error!(ER::IndexOutOfRange, "page seek overflow"))
+}
+
+async fn close_file(file: IoFile) -> RS<()> {
+    if worker_ring::has_current_worker_ring() {
+        file::close(file).await
+    } else {
+        file::close_sync(file)
+    }
 }
 
 fn validate_key_len(meta: &LinearHashMeta, key: &[u8]) -> RS<()> {
@@ -793,10 +859,10 @@ fn write_u32(buf: &mut [u8], v: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     fn test_dir() -> PathBuf {
-        let ts = SystemTime::now()
+        let ts = mudu_sys::time::system_time_now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();

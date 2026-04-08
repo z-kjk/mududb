@@ -161,7 +161,12 @@ impl PreparedStmtImpl {
             .lock()
             .map_err(|_| m_error!(EC::MutexError, "lock prepared stmt error"))?
             .take()
-            .ok_or_else(|| m_error!(EC::ExistingSuchElement, "prepared statement is still in use"))
+            .ok_or_else(|| {
+                m_error!(
+                    EC::ExistingSuchElement,
+                    "prepared statement is still in use"
+                )
+            })
     }
 
     fn restore_prepared(&self, prepared: Prepared) -> RS<()> {

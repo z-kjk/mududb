@@ -25,13 +25,12 @@ pub async fn run_query_stmt(
     Arc<Vec<FieldInfo>>,
     impl Stream<Item = PgWireResult<DataRow>>,
 )> {
-    let xid = get_tx(ctx).await?;
+    let _xid = get_tx(ctx).await?;
     let r = run_query_stmt_gut(stmt, ctx).await;
     match r {
         Ok(r) => Ok(r),
         Err(e) => {
             error!("run query error: {}", e);
-            todo!();
             //ctx.thd_ctx().abort_tx(xid).await?;
             ctx.end_tx()?;
             Err(e)

@@ -3,9 +3,9 @@ use mudu::common::result::RS;
 use mudu::common::xid::XID;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use sys_interface::async_api::{mudu_get, mudu_put, mudu_range};
 #[cfg(feature = "benchmark-runner")]
 use mudu_utils::task_trace;
+use sys_interface::async_api::{mudu_get, mudu_put, mudu_range};
 
 #[cfg(not(feature = "benchmark-runner"))]
 macro_rules! task_trace {

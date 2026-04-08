@@ -1,11 +1,9 @@
 use crate::contract::mem_store::MemStore;
 use crate::contract::meta_mgr::MetaMgr;
 use crate::contract::x_lock_mgr::{LockResult, XLockMgr};
-use crate::contract::x_log::XLog;
 use crate::tx::x_snap_mgr::SnapshotRequester;
 use async_trait::async_trait;
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::contract::data_row::DataRow;
@@ -18,7 +16,7 @@ use crate::x_engine::api::{
     VecSelTerm, XContract,
 };
 use mudu::common::buf::Buf;
-use mudu::common::id::{ThdID, OID};
+use mudu::common::id::{AttrIndex, ThdID, OID};
 use mudu::common::result::RS;
 use mudu::common::result_of::rs_of_opt;
 use mudu::common::update_delta::UpdateDelta;
@@ -42,7 +40,6 @@ struct ThdCtxInner {
     meta_mgr: Arc<dyn MetaMgr>,
     snap_req: Arc<SnapshotRequester>,
     x_lock_mgr: Arc<dyn XLockMgr>,
-    x_log: Vec<Arc<dyn XLog>>,
     tree_store: Arc<dyn MemStore>,
     pst_op_ch: Arc<dyn PstOpCh>,
     tx_ctx: HashMap<XID, TxCtx>,
@@ -54,13 +51,12 @@ impl ThdCtx {
         meta_mgr: Arc<dyn MetaMgr>,
         snap_req: Arc<SnapshotRequester>,
         x_lock_mgr: Arc<dyn XLockMgr>,
-        x_log: Vec<Arc<dyn XLog>>,
         tree_store: Arc<dyn MemStore>,
         pst_op_ch: Arc<dyn PstOpCh>,
     ) -> Self {
         Self {
             inner: Arc::new(ThdCtxInner::new(
-                id, meta_mgr, snap_req, x_lock_mgr, x_log, tree_store, pst_op_ch,
+                id, meta_mgr, snap_req, x_lock_mgr, tree_store, pst_op_ch,
             )),
         }
     }
@@ -71,10 +67,6 @@ impl ThdCtx {
 
     pub fn snap_req(&self) -> &SnapshotRequester {
         self.inner.snap_req()
-    }
-
-    pub fn x_log(&self) -> &Vec<Arc<dyn XLog>> {
-        self.inner.x_log()
     }
 
     pub fn meta_mgr(&self) -> &dyn MetaMgr {
@@ -100,7 +92,6 @@ impl ThdCtxInner {
         meta_mgr: Arc<dyn MetaMgr>,
         snap_req: Arc<SnapshotRequester>,
         x_lock_mgr: Arc<dyn XLockMgr>,
-        x_log: Vec<Arc<dyn XLog>>,
         tree_store: Arc<dyn MemStore>,
         pst_op_ch: Arc<dyn PstOpCh>,
     ) -> Self {
@@ -108,7 +99,6 @@ impl ThdCtxInner {
             id,
             snap_req,
             meta_mgr,
-            x_log,
             tree_store,
             x_lock_mgr,
             pst_op_ch,
@@ -118,10 +108,6 @@ impl ThdCtxInner {
 
     fn snap_req(&self) -> &SnapshotRequester {
         self.snap_req.as_ref()
-    }
-
-    fn x_log(&self) -> &Vec<Arc<dyn XLog>> {
-        &self.x_log
     }
 
     fn meta_mgr(&self) -> &dyn MetaMgr {
@@ -176,50 +162,37 @@ impl ThdCtxInner {
     // build update tuple for this row
     fn _update_tuple(
         tuple: &TupleRaw,
-        datum: &Vec<(OID, Buf)>,
+        datum: &Vec<(AttrIndex, Buf)>,
         table_desc: &TableDesc,
     ) -> RS<Vec<UpdateDelta>> {
         let mut delta = vec![];
         for (id, dat) in datum.iter() {
-            let opt = table_desc.oid2col().get(id);
-            let field = rs_of_opt(opt, || {
-                m_error!(
+            let field = table_desc.get_attr(*id);
+            if field.is_primary() {
+                return Err(m_error!(
                     ER::IOErr,
-                    format!("no column {} in table {}", id, table_desc.id())
-                )
-            })?;
+                    format!(
+                        "column {} in table {} is a primary key",
+                        id,
+                        table_desc.id()
+                    )
+                ));
+            }
             let datum_index = field.datum_index();
             update_tuple(datum_index, dat, table_desc.value_desc(), tuple, &mut delta)?;
         }
         Ok(delta)
     }
 
-    fn _build_tuple<const IS_KEY: bool>(data: &Vec<(OID, Buf)>, desc: &TableDesc) -> RS<Buf> {
+    fn _build_tuple<const IS_KEY: bool>(data: &Vec<(AttrIndex, Buf)>, desc: &TableDesc) -> RS<Buf> {
         let mut vec_data = data.clone();
         let ok = RefCell::new(true);
         vec_data.sort_by(|(id1, _), (id2, _)| {
-            let (opt1, opt2) = (desc.oid2col().get(id1), desc.oid2col().get(id2));
-            let mut b_ok = ok.borrow_mut();
-            match (opt1, opt2) {
-                (Some(i1), Some(i2)) => {
-                    if i1.is_primary() != i2.is_primary() {
-                        *b_ok = false;
-                    }
-                    i1.datum_index().cmp(&i2.datum_index())
-                }
-                (None, None) => {
-                    *b_ok = false;
-                    Ordering::Equal
-                }
-                (Some(_), None) => {
-                    *b_ok = false;
-                    Ordering::Greater
-                }
-                (None, Some(_)) => {
-                    *b_ok = false;
-                    Ordering::Less
-                }
+            let (f1, f2) = (desc.get_attr(*id1), desc.get_attr(*id2));
+            if f1.is_primary() != IS_KEY || f2.is_primary() != IS_KEY {
+                *ok.borrow_mut() = false;
             }
+            f1.datum_index().cmp(&f2.datum_index())
         });
         if !*ok.borrow() {
             return Err(m_error!(ER::TupleErr));
@@ -285,7 +258,7 @@ impl ThdCtxInner {
                 format!("existing key for table {}", table_id)
             ));
         }
-        let data_row = DataRow::new();
+        let data_row = DataRow::new(0);
         tx_ctx.insert(table_id, key, value, data_row).await?;
         Ok(())
     }
@@ -361,17 +334,15 @@ impl ThdCtxInner {
         };
         let mut tuple_ret = vec![];
         for i in select.vec() {
-            let opt = desc.oid2col().get(i);
-            if let Some(f) = opt {
-                let index = f.datum_index();
-                let desc = if f.is_primary() {
-                    desc.key_desc().get_field_desc(index)
-                } else {
-                    desc.value_desc().get_field_desc(index)
-                };
-                let slice = desc.get(tuple)?;
-                tuple_ret.push(slice.to_vec());
-            }
+            let f = desc.get_attr(*i);
+            let index = f.datum_index();
+            let desc = if f.is_primary() {
+                desc.key_desc().get_field_desc(index)
+            } else {
+                desc.value_desc().get_field_desc(index)
+            };
+            let slice = desc.get(tuple)?;
+            tuple_ret.push(slice.to_vec());
         }
         Ok(Some(tuple_ret))
     }
@@ -404,7 +375,7 @@ impl ThdCtxInner {
     }
 
     fn remove_tx_ctx(&self, xid: XID) {
-        self.tx_ctx.remove_async(&xid);
+        let _ = self.tx_ctx.remove_sync(&xid);
     }
 }
 

@@ -17,6 +17,8 @@ interface system {
 
     put: func(put-in: list<u8>) -> list<u8>;
 
+    delete: func(delete-in: list<u8>) -> list<u8>;
+
     range: func(range-in: list<u8>) -> list<u8>;
 }
 

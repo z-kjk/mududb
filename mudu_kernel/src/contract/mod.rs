@@ -1,7 +1,8 @@
+#![allow(dead_code)]
+
 pub mod lsn;
 pub mod mem_store;
 pub mod x_lock_mgr;
-pub mod x_log;
 
 pub mod meta_mgr;
 

@@ -3,7 +3,7 @@ use crate::backend::mududb_cfg::MuduDBCfg;
 use crate::service::app_list::AppList;
 use async_trait::async_trait;
 use mudu::common::result::RS;
-use mudu_kernel::server_ur::procedure_runtime::ProcInvoker;
+use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
 use std::sync::Arc;
 
 #[async_trait(?Send)]
@@ -36,7 +36,7 @@ pub trait AppMgr: Send + Sync {
     /// Create a new procedure invoker for one runtime consumer.
     ///
     /// This is a factory method, not a shared accessor. Each returned
-    /// `Arc<dyn ProcInvoker>` must own an independent invocation environment and
+    /// `Arc<dyn AsyncFuncInvoker>` must own an independent invocation environment and
     /// must not share mutable runtime internals, stores, or other execution
     /// state with invokers returned from other calls. This requirement exists
     /// so backends such as the io_uring worker runtime can safely create one
@@ -45,5 +45,5 @@ pub trait AppMgr: Send + Sync {
     /// The implementation must reuse the current procedure invocation
     /// mechanism, and it must not change or bypass any of the existing public
     /// runtime behavior for legacy `p1` or component-based execution.
-    async fn create_invoker(&self, cfg: &MuduDBCfg) -> RS<Arc<dyn ProcInvoker>>;
+    async fn create_invoker(&self, cfg: &MuduDBCfg) -> RS<Arc<dyn AsyncFuncInvoker>>;
 }

@@ -3,6 +3,10 @@ use uuid::Uuid;
 /// unique object id
 pub type OID = u128;
 
+// Nth attribute index of data tuple
+pub type AttrIndex = usize;
+
+pub type TupleID = u64;
 pub type ThdID = u64;
 
 pub const INVALID_OID: OID = 0;

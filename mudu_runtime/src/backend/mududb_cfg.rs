@@ -1,4 +1,4 @@
-use crate::service::runtime_opt::{ComponentTarget, RuntimeTarget};
+use crate::service::runtime_opt::ComponentTarget;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
@@ -29,7 +29,8 @@ pub enum RoutingMode {
 #[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone)]
 pub struct MuduDBCfg {
     pub mpk_path: String,
-    pub data_path: String,
+    #[serde(alias = "data_path")]
+    pub db_path: String,
     pub listen_ip: String,
     pub http_listen_port: u16,
     #[serde(default = "default_http_worker_threads")]
@@ -37,8 +38,6 @@ pub struct MuduDBCfg {
     pub pg_listen_port: u16,
     #[serde(default)]
     pub component_target: Option<ComponentTarget>,
-    #[serde(default)]
-    pub enable_p2: bool,
     pub enable_async: bool,
     #[serde(default)]
     pub server_mode: ServerMode,
@@ -64,11 +63,11 @@ pub struct MuduDBCfg {
 
 impl Display for MuduDBCfg {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let runtime_target = self.runtime_target();
+        let component_target = self.component_target();
         write!(f, "MuduDB Setting:\n")?;
         write!(f, "-------------------\n")?;
         write!(f, "  -> Package path: {}\n", self.mpk_path)?;
-        write!(f, "  -> Data path: {}\n", self.data_path)?;
+        write!(f, "  -> Data path: {}\n", self.db_path)?;
         write!(f, "  -> Listen IP address: {}\n", self.listen_ip)?;
         write!(f, "  -> HTTP Listening port: {}\n", self.http_listen_port)?;
         write!(
@@ -77,7 +76,7 @@ impl Display for MuduDBCfg {
             self.http_worker_threads
         )?;
         write!(f, "  -> PG Listening port: {}\n", self.pg_listen_port)?;
-        write!(f, "  -> Runtime target: {:?}\n", runtime_target)?;
+        write!(f, "  -> Component target: {:?}\n", component_target)?;
         write!(f, "  -> Enable Async: {}\n", self.enable_async)?;
         write!(f, "  -> Server mode: {:?}\n", self.server_mode)?;
         write!(f, "  -> TCP Listening port: {}\n", self.tcp_listen_port)?;
@@ -126,13 +125,12 @@ impl Default for MuduDBCfg {
     fn default() -> Self {
         Self {
             mpk_path: temp_dir().to_str().unwrap().to_string(),
-            data_path: temp_dir().to_str().unwrap().to_string(),
+            db_path: temp_dir().to_str().unwrap().to_string(),
             listen_ip: "127.0.0.1".to_string(),
             http_listen_port: 8300,
             http_worker_threads: default_http_worker_threads(),
             pg_listen_port: 5432,
             component_target: None,
-            enable_p2: true,
             enable_async: true,
             server_mode: ServerMode::Legacy,
             tcp_listen_port: default_tcp_listen_port(),
@@ -151,12 +149,8 @@ impl Default for MuduDBCfg {
 const MUDUDB_CFG_TOML_PATH: &str = ".mudu/mududb_cfg.toml";
 
 impl MuduDBCfg {
-    pub fn runtime_target(&self) -> RuntimeTarget {
-        match self.component_target {
-            Some(target) => RuntimeTarget::Component(target),
-            None if self.enable_p2 => RuntimeTarget::Component(ComponentTarget::P2),
-            None => RuntimeTarget::P1,
-        }
+    pub fn component_target(&self) -> ComponentTarget {
+        self.component_target.unwrap_or(ComponentTarget::P2)
     }
 
     pub fn effective_worker_threads(&self) -> usize {
@@ -276,7 +270,6 @@ listen_ip = "127.0.0.1"
 http_listen_port = 8300
 http_worker_threads = 1
 pg_listen_port = 5432
-enable_p2 = true
 enable_async = true
 
 # 0 = Legacy
@@ -307,6 +300,7 @@ routing_mode = 0
             cfg.routing_mode,
             crate::backend::mududb_cfg::RoutingMode::ConnectionId
         );
+        assert_eq!(cfg.db_path, "/tmp/data");
         assert_eq!(cfg.http_worker_threads, 1);
     }
 }

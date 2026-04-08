@@ -1,11 +1,11 @@
 use crate::client::async_client::{AsyncClient, AsyncClientImpl};
 use base64::Engine;
-use mudu_binding::universal::uni_dat_value::UniDatValue;
-use mudu_binding::universal::uni_oid::UniOid;
-use mudu_binding::universal::uni_primitive_value::UniPrimitiveValue;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
+use mudu_binding::universal::uni_dat_value::UniDatValue;
+use mudu_binding::universal::uni_oid::UniOid;
+use mudu_binding::universal::uni_primitive_value::UniPrimitiveValue;
 use mudu_contract::protocol::{
     ClientRequest, GetRequest, KeyValue, ProcedureInvokeRequest, PutRequest, RangeScanRequest,
 };
@@ -181,21 +181,29 @@ fn json_value_to_uni_dat_value(value: Value) -> RS<UniDatValue> {
             serde_json::to_vec(&Value::Null)
                 .map_err(|e| m_error!(EC::EncodeErr, "encode null payload error", e))?,
         )),
-        Value::Bool(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_bool(inner))),
+        Value::Bool(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_bool(
+            inner,
+        ))),
         Value::Number(inner) => {
             if let Some(value) = inner.as_i64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_i64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_i64(
+                    value,
+                )))
             } else if let Some(value) = inner.as_u64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_u64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_u64(
+                    value,
+                )))
             } else if let Some(value) = inner.as_f64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_f64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_f64(
+                    value,
+                )))
             } else {
                 Err(m_error!(EC::DecodeErr, "unsupported numeric json payload"))
             }
         }
-        Value::String(inner) => Ok(UniDatValue::from_primitive(
-            UniPrimitiveValue::from_string(inner),
-        )),
+        Value::String(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_string(
+            inner,
+        ))),
         Value::Array(inner) => inner
             .into_iter()
             .map(json_value_to_uni_dat_value)
@@ -299,8 +307,8 @@ mod tests {
     use async_trait::async_trait;
     use mudu_contract::protocol::{
         GetResponse, KeyValue, ProcedureInvokeResponse, PutResponse, RangeScanResponse,
-        ServerResponse,
-        SessionCloseRequest, SessionCloseResponse, SessionCreateRequest, SessionCreateResponse,
+        ServerResponse, SessionCloseRequest, SessionCloseResponse, SessionCreateRequest,
+        SessionCreateResponse,
     };
 
     struct MockAsyncIoUringTcpClient {

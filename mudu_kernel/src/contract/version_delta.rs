@@ -2,12 +2,20 @@ use crate::contract::timestamp::Timestamp;
 use mudu::common::update_delta::UpdateDelta;
 
 impl VersionDelta {
-    pub fn new(timestamp: Timestamp, update: Vec<UpdateDelta>) -> Self {
-        Self { timestamp, update }
+    pub fn new(timestamp: Timestamp, deleted: bool, update: Vec<UpdateDelta>) -> Self {
+        Self {
+            timestamp,
+            deleted,
+            update,
+        }
     }
 
     pub fn timestamp(&self) -> &Timestamp {
         &self.timestamp
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.deleted
     }
 
     pub fn update_delta(&self) -> &Vec<UpdateDelta> {
@@ -21,5 +29,6 @@ impl VersionDelta {
 
 pub struct VersionDelta {
     timestamp: Timestamp,
+    deleted: bool,
     update: Vec<UpdateDelta>,
 }

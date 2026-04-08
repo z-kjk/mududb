@@ -8,10 +8,8 @@ pub mod sync;
 pub mod sync_standalone;
 #[cfg(all(
     target_arch = "wasm32",
-    any(
-        all(feature = "wasip1", not(feature = "component-model")),
-        all(feature = "component-model", not(feature = "async"))
-    )
+    feature = "component-model",
+    not(feature = "async")
 ))]
 pub mod sync_wasm;
 

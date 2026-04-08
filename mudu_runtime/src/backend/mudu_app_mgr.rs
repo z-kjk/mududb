@@ -11,8 +11,8 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use mudu_binding::procedure::procedure_invoke;
-use mudu_kernel::server_ur::procedure_runtime::ProcInvoker;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use std::collections::HashSet;
 use std::env::temp_dir;
 use std::fs;
@@ -49,7 +49,7 @@ impl MuduProcInvoker {
 }
 
 #[async_trait]
-impl ProcInvoker for MuduProcInvoker {
+impl AsyncFuncInvoker for MuduProcInvoker {
     async fn invoke(
         &self,
         session_id: OID,
@@ -191,23 +191,23 @@ impl AppMgr for MuduAppMgr {
         Ok(AppList { apps })
     }
 
-    async fn create_invoker(&self, cfg: &MuduDBCfg) -> RS<Arc<dyn ProcInvoker>> {
+    async fn create_invoker(&self, cfg: &MuduDBCfg) -> RS<Arc<dyn AsyncFuncInvoker>> {
         let cfg = cfg.clone();
         let invoker = build_owned_proc_invoker(&cfg).await?;
         self.register_invoker(&invoker);
-        Ok(invoker as Arc<dyn ProcInvoker>)
+        Ok(invoker as Arc<dyn AsyncFuncInvoker>)
     }
 }
 
 async fn create_runtime_from_cfg(cfg: &MuduDBCfg) -> RS<Arc<dyn Runtime>> {
-    let runtime_target = cfg.runtime_target();
-    let enable_async = cfg.enable_async && runtime_target.uses_component_model();
+    let component_target = cfg.component_target();
+    let enable_async = cfg.enable_async;
     create_runtime_service(
         &cfg.mpk_path,
-        &cfg.data_path,
+        &cfg.db_path,
         None,
         RuntimeOpt {
-            target: runtime_target,
+            component_target,
             enable_async,
         },
     )
@@ -216,7 +216,7 @@ async fn create_runtime_from_cfg(cfg: &MuduDBCfg) -> RS<Arc<dyn Runtime>> {
 
 async fn build_owned_proc_invoker(cfg: &MuduDBCfg) -> RS<Arc<MuduProcInvoker>> {
     let runtime = create_runtime_from_cfg(cfg).await?;
-    let enable_async = cfg.enable_async && cfg.runtime_target().uses_component_model();
+    let enable_async = cfg.enable_async;
     Ok(Arc::new(MuduProcInvoker::new(
         cfg.clone(),
         runtime,

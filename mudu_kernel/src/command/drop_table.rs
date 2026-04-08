@@ -1,31 +1,47 @@
 use crate::contract::cmd_exec::CmdExec;
+use crate::contract::meta_mgr::MetaMgr;
 use crate::x_engine::api::XContract;
-use crate::x_engine::thd_ctx::ThdCtx;
 use crate::x_engine::x_param::PDropTable;
 use async_trait::async_trait;
 use mudu::common::result::RS;
+use mudu_utils::task_trace;
+use std::sync::Arc;
 
 pub struct DropTable {
     drop_param: PDropTable,
-    ctx: ThdCtx,
+    x_contract: Arc<dyn XContract>,
+    meta_mgr: Arc<dyn MetaMgr>,
 }
 
 impl DropTable {
-    pub fn new(drop_param: PDropTable, ctx: ThdCtx) -> Self {
-        Self { drop_param, ctx }
+    pub fn new(
+        drop_param: PDropTable,
+        x_contract: Arc<dyn XContract>,
+        meta_mgr: Arc<dyn MetaMgr>,
+    ) -> Self {
+        Self {
+            drop_param,
+            x_contract,
+            meta_mgr,
+        }
     }
 }
 
 #[async_trait]
 impl CmdExec for DropTable {
     async fn prepare(&self) -> RS<()> {
+        if let Some(table_id) = self.drop_param.oid {
+            let _ = self.meta_mgr.get_table_by_id(table_id).await?;
+        }
         Ok(())
     }
 
     async fn run(&self) -> RS<()> {
-        let xid = self.drop_param.xid;
-        if let Some(t) = &self.drop_param.oid {
-            self.ctx.drop_table(xid, *t).await?;
+        task_trace!();
+        if let Some(table_id) = self.drop_param.oid {
+            self.x_contract
+                .drop_table(self.drop_param.xid, table_id)
+                .await?;
         }
         Ok(())
     }

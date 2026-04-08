@@ -5,9 +5,9 @@ use crate::backend::mududb_cfg::MuduDBCfg;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use mudu_kernel::server_ur::routing::RoutingMode;
-use mudu_kernel::server_ur::server::IoUringTcpBackend as KernelIoUringTcpBackend;
-use mudu_kernel::server_ur::server::IoUringTcpServerConfig;
+use mudu_kernel::server::routing::RoutingMode;
+use mudu_kernel::server::server::IoUringTcpBackend as KernelIoUringTcpBackend;
+use mudu_kernel::server::server::IoUringTcpServerConfig;
 use mudu_utils::notifier::{Waiter, notify_wait};
 use std::sync::Arc;
 
@@ -48,7 +48,8 @@ impl IoUringBackend {
             worker_count,
             cfg.listen_ip.clone(),
             cfg.tcp_listen_port,
-            cfg.data_path.clone(),
+            cfg.db_path.clone(),
+            cfg.db_path.clone(),
             routing_mode,
             None,
         )?

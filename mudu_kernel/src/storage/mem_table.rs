@@ -3,7 +3,6 @@ use mudu::common::buf::Buf;
 use mudu::common::result::RS;
 use mudu_contract::tuple::tuple_binary_desc::TupleBinaryDesc as TupleDesc;
 use mudu_contract::tuple::tuple_key::{_KeyRef, TupleKey};
-use scc::Guard;
 use scc::TreeIndex;
 use std::collections::Bound;
 use std::sync::Arc;
@@ -45,7 +44,7 @@ impl MemTableI {
     }
 
     pub fn read_key<K: AsRef<[u8]>>(&self, key: K) -> RS<Option<DataRow>> {
-        let key_ref = _KeyRef::new(&key);
+        let _key_ref = _KeyRef::new(&key);
         todo!();
         /*
         let opt_r = self.tree_index.peek(todo!(), &g);
@@ -54,7 +53,7 @@ impl MemTableI {
          */
     }
 
-    pub fn read_range<K: AsRef<[u8]>>(&self, begin: Bound<K>, end: Bound<K>) -> RS<Vec<DataRow>> {
+    pub fn read_range<K: AsRef<[u8]>>(&self, _begin: Bound<K>, _end: Bound<K>) -> RS<Vec<DataRow>> {
         todo!()
         /*
         let mut rows = vec![];

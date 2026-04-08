@@ -1,0 +1,1067 @@
+use crate::server::async_func_runtime::AsyncFuncInvokerPtr;
+use crate::server::routing::{
+    route_worker, RoutingContext, RoutingMode, SessionOpenConfig, SessionOpenTransferAction,
+};
+use crate::server::session_bound_worker_runtime::{
+    as_worker_local_ref, new_session_bound_worker_runtime,
+};
+use crate::server::worker_local::{WorkerExecute, WorkerLocalRef};
+use crate::server::worker_registry::{WorkerIdentity, WorkerRegistry};
+use crate::server::worker_session_manager::{SessionContext, WorkerSessionManager};
+use crate::server::worker_snapshot::KvItem;
+use crate::server::worker_tx_manager::WorkerTxManager;
+use crate::server::x_contract::IoUringXContract;
+use crate::wal::worker_log::{ChunkedWorkerLogBackend, WorkerLogBatching, WorkerLogLayout};
+use crate::wal::xl_batch::XLBatch;
+use mudu::common::id::OID;
+use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
+use mudu_contract::protocol::{ProcedureInvokeRequest, ProcedureInvokeResponse};
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+
+#[derive(Clone)]
+/// Per-worker execution context used by the `client` backend.
+///
+/// The `IoUringWorker` name is also historical. The type is shared by both the
+/// Linux native `io_uring` loop and the non-Linux fallback loop so upper
+/// layers do not need target-specific worker abstractions.
+pub struct IoUringWorker {
+    worker_index: usize,
+    worker_id: OID,
+    partition_ids: Vec<OID>,
+    worker_count: usize,
+    routing_mode: RoutingMode,
+    contract: Arc<IoUringXContract>,
+    log_layout: WorkerLogLayout,
+    procedure_runtime: Option<AsyncFuncInvokerPtr>,
+    session_manager: Arc<WorkerSessionManager>,
+    registry: Arc<WorkerRegistry>,
+}
+
+impl IoUringWorker {
+    pub fn new(
+        identity: WorkerIdentity,
+        worker_count: usize,
+        routing_mode: RoutingMode,
+        log_dir: String,
+        data_dir: String,
+        log_chunk_size: u64,
+        procedure_runtime: Option<AsyncFuncInvokerPtr>,
+        registry: Arc<WorkerRegistry>,
+    ) -> RS<Self> {
+        Self::new_with_log_batching(
+            identity,
+            worker_count,
+            routing_mode,
+            log_dir,
+            data_dir,
+            log_chunk_size,
+            WorkerLogBatching::default(),
+            procedure_runtime,
+            registry,
+        )
+    }
+
+    pub fn new_with_log_batching(
+        identity: WorkerIdentity,
+        worker_count: usize,
+        routing_mode: RoutingMode,
+        log_dir: String,
+        data_dir: String,
+        log_chunk_size: u64,
+        log_batching: WorkerLogBatching,
+        procedure_runtime: Option<AsyncFuncInvokerPtr>,
+        registry: Arc<WorkerRegistry>,
+    ) -> RS<Self> {
+        let active_sessions = Arc::new(AtomicUsize::new(0));
+        let partition_id = identity.partition_ids.first().copied().ok_or_else(|| {
+            m_error!(
+                EC::ParseErr,
+                format!("worker {} has no partition ids", identity.worker_id)
+            )
+        })?;
+        let worker_id = identity.worker_id;
+        let log_layout =
+            WorkerLogLayout::new(log_dir, worker_id, log_chunk_size)?.with_batching(log_batching);
+        let log = ChunkedWorkerLogBackend::new_with_active_sessions(
+            log_layout.clone(),
+            active_sessions.clone(),
+        )?;
+        Ok(Self {
+            worker_index: identity.worker_index,
+            worker_id,
+            partition_ids: identity.partition_ids,
+            worker_count,
+            routing_mode,
+            contract: Arc::new(IoUringXContract::with_worker_log_and_data_dir(
+                log,
+                partition_id,
+                data_dir,
+            )),
+            log_layout,
+            procedure_runtime,
+            session_manager: Arc::new(WorkerSessionManager::new(active_sessions)),
+            registry,
+        })
+    }
+
+    pub fn route_connection(&self, conn_id: u64, remote_addr: SocketAddr) -> usize {
+        let ctx = RoutingContext::new(conn_id, remote_addr, None);
+        route_worker(&ctx, self.routing_mode, self.worker_count)
+    }
+
+    pub async fn delete_async(&self, key: &[u8]) -> RS<()> {
+        self.contract.worker_delete_async(key).await
+    }
+
+    pub fn get(&self, key: &[u8]) -> RS<Option<Vec<u8>>> {
+        self.contract.worker_get(key)
+    }
+
+    pub async fn invoke_procedure(
+        &self,
+        session_id: OID,
+        procedure_name: &str,
+        procedure_parameters: Vec<u8>,
+        worker_local: WorkerLocalRef,
+    ) -> RS<Vec<u8>> {
+        let procedure_runtime = self
+            .procedure_runtime
+            .as_ref()
+            .ok_or_else(|| m_error!(EC::NotImplemented, "procedure runtime is not configured"))?;
+        procedure_runtime
+            .invoke(
+                session_id,
+                procedure_name,
+                procedure_parameters,
+                worker_local,
+            )
+            .await
+    }
+
+    pub fn create_session(&self, conn_id: u64) -> RS<OID> {
+        self.session_manager.create_session(conn_id)
+    }
+
+    pub fn close_session(&self, conn_id: u64, session_id: OID) -> RS<bool> {
+        self.session_manager.close_session(conn_id, session_id)
+    }
+
+    pub fn close_connection_sessions(&self, conn_id: u64) -> RS<()> {
+        self.session_manager.close_connection_sessions(conn_id)
+    }
+
+    pub fn open_session(&self, session_id: OID) -> RS<OID> {
+        self.session_manager.open_session(session_id)
+    }
+
+    pub fn close_session_by_id(&self, session_id: OID) -> RS<()> {
+        self.session_manager.close_session_by_id(session_id)
+    }
+
+    fn session_context(&self, session_id: OID) -> RS<Arc<SessionContext>> {
+        self.session_manager.session_context(session_id)
+    }
+
+    pub fn get_for_connection(
+        &self,
+        conn_id: u64,
+        session_id: OID,
+        key: &[u8],
+    ) -> RS<Option<Vec<u8>>> {
+        self.ensure_session_owned_by_connection(conn_id, session_id)?;
+        self.get_in_session(session_id, key)
+    }
+
+    pub fn put_for_connection(
+        &self,
+        conn_id: u64,
+        session_id: OID,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> RS<()> {
+        self.ensure_session_owned_by_connection(conn_id, session_id)?;
+        self.put_in_session(session_id, key, value)
+    }
+
+    pub async fn put_for_connection_async(
+        &self,
+        conn_id: u64,
+        session_id: OID,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> RS<()> {
+        self.ensure_session_owned_by_connection(conn_id, session_id)?;
+        self.put_in_session_async(session_id, key, value).await
+    }
+
+    pub fn range_for_connection(
+        &self,
+        conn_id: u64,
+        session_id: OID,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> RS<Vec<KvItem>> {
+        self.ensure_session_owned_by_connection(conn_id, session_id)?;
+        self.range_in_session(session_id, start_key, end_key)
+    }
+
+    #[allow(dead_code)]
+    fn execute_tx(&self, session_id: OID, instruction: WorkerExecute) -> RS<()> {
+        let session = self.session_context(session_id)?;
+        match instruction {
+            WorkerExecute::BeginTx => {
+                if session.tx_manager_ref().is_some() {
+                    return Err(m_error!(
+                        EC::ExistingSuchElement,
+                        format!("session {} already has an active transaction", session_id)
+                    ));
+                }
+                session
+                    .set_tx_manager(Some(WorkerTxManager::new(self.contract.worker_begin_tx()?)));
+                Ok(())
+            }
+            WorkerExecute::CommitTx => {
+                let tx_manager = session.take_tx_manager().ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("session {} has no active transaction", session_id)
+                    )
+                })?;
+                let snapshot = tx_manager.snapshot().clone();
+                let xid = tx_manager.xid();
+                let items = tx_manager.staged_put_items();
+                let batch = tx_manager.into_xl_batch();
+                self.contract
+                    .worker_commit_put_batch(&snapshot, xid, items, batch)?;
+                Ok(())
+            }
+            WorkerExecute::RollbackTx => {
+                let tx_manager = session.take_tx_manager().ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("session {} has no active transaction", session_id)
+                    )
+                })?;
+                self.contract.worker_rollback_tx(tx_manager.xid())?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn execute_tx_async(
+        &self,
+        session_id: OID,
+        instruction: WorkerExecute,
+    ) -> RS<()> {
+        let session = self.session_context(session_id)?;
+        match instruction {
+            WorkerExecute::BeginTx => {
+                if session.tx_manager_ref().is_some() {
+                    return Err(m_error!(
+                        EC::ExistingSuchElement,
+                        format!("session {} already has an active transaction", session_id)
+                    ));
+                }
+                session
+                    .set_tx_manager(Some(WorkerTxManager::new(self.contract.worker_begin_tx()?)));
+                Ok(())
+            }
+            WorkerExecute::CommitTx => {
+                let tx_manager = session.take_tx_manager().ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("session {} has no active transaction", session_id)
+                    )
+                })?;
+                let snapshot = tx_manager.snapshot().clone();
+                let xid = tx_manager.xid();
+                let items = tx_manager.staged_put_items();
+                let batch = tx_manager.into_xl_batch();
+                self.contract
+                    .worker_commit_put_batch_async(&snapshot, xid, items, batch)
+                    .await
+            }
+            WorkerExecute::RollbackTx => {
+                let tx_manager = session.take_tx_manager().ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("session {} has no active transaction", session_id)
+                    )
+                })?;
+                self.contract.worker_rollback_tx(tx_manager.xid())?;
+                Ok(())
+            }
+        }
+    }
+
+    fn put_in_session(&self, session_id: OID, key: Vec<u8>, value: Vec<u8>) -> RS<()> {
+        let session = self.session_context(session_id)?;
+        match session.tx_manager_mut().as_mut() {
+            Some(tx_manager) => {
+                tx_manager.put(key, value);
+                Ok(())
+            }
+            None => self.contract.worker_put(key, value),
+        }
+    }
+
+    pub(crate) async fn put_in_session_async(
+        &self,
+        session_id: OID,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> RS<()> {
+        let session = self.session_context(session_id)?;
+        match session.tx_manager_mut().as_mut() {
+            Some(tx_manager) => {
+                tx_manager.put(key, value);
+                Ok(())
+            }
+            None => self.contract.worker_put_async(key, value).await,
+        }
+    }
+
+    pub(crate) async fn delete_in_session_async(&self, session_id: OID, key: &[u8]) -> RS<()> {
+        let session = self.session_context(session_id)?;
+        match session.tx_manager_mut().as_mut() {
+            Some(tx_manager) => {
+                tx_manager.delete(key.to_vec());
+                Ok(())
+            }
+            None => self.contract.worker_delete_async(key).await,
+        }
+    }
+
+    pub(crate) fn get_in_session(&self, session_id: OID, key: &[u8]) -> RS<Option<Vec<u8>>> {
+        let session = self.session_context(session_id)?;
+        let staged = session
+            .tx_manager_ref()
+            .as_ref()
+            .and_then(|tx_manager| tx_manager.get(key));
+        match staged {
+            Some(value) => Ok(value),
+            None => match session.tx_manager_ref().as_ref() {
+                Some(tx_manager) => self
+                    .contract
+                    .worker_get_with_snapshot(tx_manager.snapshot(), key),
+                None => self.contract.worker_get(key),
+            },
+        }
+    }
+
+    pub(crate) fn range_in_session(
+        &self,
+        session_id: OID,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> RS<Vec<KvItem>> {
+        let session = self.session_context(session_id)?;
+        let staged = session
+            .tx_manager_ref()
+            .as_ref()
+            .map(|tx_manager| tx_manager.staged_items_in_range(start_key, end_key))
+            .unwrap_or_default();
+
+        let mut merged = BTreeMap::new();
+        let base_items = match session.tx_manager_ref().as_ref() {
+            Some(tx_manager) => self.contract.worker_range_scan_with_snapshot(
+                tx_manager.snapshot(),
+                start_key,
+                end_key,
+            )?,
+            None => self.contract.worker_range_scan(start_key, end_key)?,
+        };
+        for item in base_items {
+            merged.insert(item.key, Some(item.value));
+        }
+        for (key, value) in staged {
+            merged.insert(key, value);
+        }
+        Ok(merged
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|value| KvItem { key, value }))
+            .collect())
+    }
+
+    fn ensure_session_owned_by_connection(&self, conn_id: u64, session_id: OID) -> RS<()> {
+        self.session_manager
+            .ensure_session_owned_by_connection(conn_id, session_id)
+    }
+
+    pub async fn handle_procedure_request(
+        &self,
+        conn_id: u64,
+        request: &ProcedureInvokeRequest,
+    ) -> RS<ProcedureInvokeResponse> {
+        let session_id = request.session_id() as OID;
+        self.ensure_session_owned_by_connection(conn_id, session_id)?;
+        let worker_local =
+            as_worker_local_ref(new_session_bound_worker_runtime(self.clone(), session_id));
+        let result = self
+            .invoke_procedure(
+                session_id,
+                request.procedure_name(),
+                request.procedure_parameters_owned(),
+                worker_local,
+            )
+            .await?;
+        Ok(ProcedureInvokeResponse::new(result))
+    }
+
+    pub fn worker_index(&self) -> usize {
+        self.worker_index
+    }
+
+    pub fn worker_id(&self) -> OID {
+        self.worker_id
+    }
+
+    pub fn partition_ids(&self) -> &[OID] {
+        &self.partition_ids
+    }
+
+    pub fn worker_count(&self) -> usize {
+        self.worker_count
+    }
+
+    pub fn registry(&self) -> &Arc<WorkerRegistry> {
+        &self.registry
+    }
+
+    pub fn log_layout(&self) -> WorkerLogLayout {
+        self.log_layout.clone()
+    }
+
+    pub fn worker_log(&self) -> Option<ChunkedWorkerLogBackend> {
+        self.contract.worker_log()
+    }
+
+    pub fn replay_log_batch(&self, batch: XLBatch) -> RS<()> {
+        self.contract.replay_worker_log_batch(batch)
+    }
+
+    pub fn open_session_with_config(&self, conn_id: u64, config: SessionOpenConfig) -> RS<OID> {
+        if config.target_worker_index() != self.worker_index()
+            || config.worker_id() != self.worker_id()
+        {
+            return Err(m_error!(
+                EC::InternalErr,
+                format!(
+                    "session open landed on worker index {} worker id {}, expected worker index {} worker id {}",
+                    self.worker_index(),
+                    self.worker_id(),
+                    config.target_worker_index(),
+                    config.worker_id()
+                )
+            ));
+        }
+        if config.session_id() == 0 {
+            self.create_session(conn_id)
+        } else {
+            self.ensure_session_owned_by_connection(conn_id, config.session_id())?;
+            Ok(config.session_id())
+        }
+    }
+
+    pub fn prepare_connection_transfer(
+        &self,
+        conn_id: u64,
+        action: Option<SessionOpenTransferAction>,
+    ) -> RS<Vec<OID>> {
+        if self.connection_has_active_tx(conn_id)? {
+            return Err(m_error!(
+                EC::TxErr,
+                format!(
+                    "connection {} cannot be transferred while a session transaction is active",
+                    conn_id
+                )
+            ));
+        }
+        if let Some(action) = action {
+            let config = action.config();
+            if config.session_id() != 0 {
+                self.ensure_session_owned_by_connection(conn_id, config.session_id())?;
+            }
+        }
+        self.session_manager.detach_connection_sessions(conn_id)
+    }
+
+    pub fn adopt_connection_sessions(&self, conn_id: u64, session_ids: &[OID]) -> RS<()> {
+        self.session_manager
+            .adopt_connection_sessions(conn_id, session_ids)
+    }
+
+    fn connection_has_active_tx(&self, conn_id: u64) -> RS<bool> {
+        self.session_manager.connection_has_active_tx(conn_id)
+    }
+}
+
+#[allow(dead_code)]
+fn worker_log_oid(worker_id: usize) -> OID {
+    worker_id as u128 + 1
+}
+
+#[allow(dead_code)]
+fn is_key_in_range(key: &[u8], start_key: &[u8], end_key: &[u8]) -> bool {
+    key >= start_key && (end_key.is_empty() || key < end_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::meta_mgr::MetaMgr;
+    use crate::contract::schema_column::SchemaColumn;
+    use crate::contract::schema_table::SchemaTable;
+    use crate::contract::table_desc::TableDesc;
+    use crate::contract::table_info::TableInfo;
+    use crate::server::async_func_runtime::AsyncFuncInvoker;
+    use crate::server::session_bound_worker_runtime::new_session_bound_worker_runtime;
+    use crate::server::worker_local::{WorkerExecute, WorkerLocal};
+    use crate::server::worker_registry::{load_or_create_worker_registry, WorkerRegistry};
+    use crate::storage::time_series::time_series_file::TimeSeriesFile;
+    use crate::x_engine::api::XContract;
+    use async_trait::async_trait;
+    use futures::FutureExt;
+    use mudu::common::id::gen_oid;
+    use mudu_type::dat_type_id::DatTypeID;
+    use mudu_type::dt_info::DTInfo;
+    use std::collections::HashMap;
+    use std::env::temp_dir;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingProcedureRuntime {
+        calls: Mutex<Vec<(OID, String, Vec<u8>)>>,
+    }
+
+    #[async_trait]
+    impl AsyncFuncInvoker for RecordingProcedureRuntime {
+        async fn invoke(
+            &self,
+            session_id: OID,
+            procedure_name: &str,
+            procedure_parameters: Vec<u8>,
+            _worker_local: WorkerLocalRef,
+        ) -> RS<Vec<u8>> {
+            self.calls.lock().unwrap().push((
+                session_id,
+                procedure_name.to_string(),
+                procedure_parameters.clone(),
+            ));
+            Ok(procedure_parameters)
+        }
+    }
+
+    struct TestMetaMgr {
+        tables: Mutex<HashMap<OID, Arc<TableDesc>>>,
+    }
+
+    impl TestMetaMgr {
+        fn new() -> Self {
+            Self {
+                tables: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MetaMgr for TestMetaMgr {
+        async fn get_table_by_id(&self, oid: OID) -> RS<Arc<TableDesc>> {
+            self.tables
+                .lock()
+                .unwrap()
+                .get(&oid)
+                .cloned()
+                .ok_or_else(|| m_error!(EC::NoSuchElement, format!("no such table {}", oid)))
+        }
+
+        async fn get_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
+            Ok(self
+                .tables
+                .lock()
+                .unwrap()
+                .values()
+                .find(|table| table.name() == name)
+                .cloned())
+        }
+
+        async fn create_table(&self, schema: &SchemaTable) -> RS<()> {
+            let table = TableInfo::new(schema.clone())?.table_desc()?;
+            self.tables.lock().unwrap().insert(schema.id(), table);
+            Ok(())
+        }
+
+        async fn drop_table(&self, table_id: OID) -> RS<()> {
+            self.tables.lock().unwrap().remove(&table_id);
+            Ok(())
+        }
+    }
+
+    fn test_registry(worker_count: usize) -> (String, Arc<WorkerRegistry>) {
+        let dir = temp_dir()
+            .join(format!("worker_test_{}", gen_oid()))
+            .to_string_lossy()
+            .into_owned();
+        let registry = load_or_create_worker_registry(&dir, worker_count).unwrap();
+        (dir, registry)
+    }
+
+    fn test_worker(
+        worker_index: usize,
+        worker_count: usize,
+        log_dir: &str,
+        data_dir: &str,
+        registry: Arc<WorkerRegistry>,
+        procedure_runtime: Option<AsyncFuncInvokerPtr>,
+    ) -> IoUringWorker {
+        let identity = registry.worker(worker_index).cloned().unwrap();
+        IoUringWorker::new(
+            identity,
+            worker_count,
+            RoutingMode::ConnectionId,
+            log_dir.to_string(),
+            data_dir.to_string(),
+            4096,
+            procedure_runtime,
+            registry,
+        )
+        .unwrap()
+    }
+
+    fn test_schema() -> SchemaTable {
+        SchemaTable::new(
+            "t".to_string(),
+            vec![SchemaColumn::new(
+                "id".to_string(),
+                DatTypeID::I32,
+                DTInfo::from_text(DatTypeID::I32, String::new()),
+            )],
+            vec![SchemaColumn::new(
+                "v".to_string(),
+                DatTypeID::I32,
+                DTInfo::from_text(DatTypeID::I32, String::new()),
+            )],
+        )
+    }
+
+    #[tokio::test]
+    async fn worker_invokes_configured_procedure_runtime() {
+        let runtime = Arc::new(RecordingProcedureRuntime::default());
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, Some(runtime.clone()));
+
+        let response = worker
+            .handle_procedure_request(
+                11,
+                &ProcedureInvokeRequest::new(9, "app/mod/proc", b"payload".to_vec()),
+            )
+            .await
+            .unwrap_err();
+        assert!(response.to_string().contains("does not exist"));
+
+        let session_id = worker.create_session(11).unwrap();
+        let response = worker
+            .handle_procedure_request(
+                11,
+                &ProcedureInvokeRequest::new(session_id, "app/mod/proc", b"payload".to_vec()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.into_result(), b"payload".to_vec());
+
+        let calls = runtime.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, session_id);
+        assert_eq!(calls[0].1, "app/mod/proc");
+        assert_eq!(calls[0].2, b"payload".to_vec());
+    }
+
+    #[test]
+    fn worker_session_lifecycle_is_connection_scoped() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(7).unwrap();
+        assert!(worker.close_session(7, session_id).unwrap());
+
+        let session_id = worker.create_session(7).unwrap();
+        let err = worker.close_session(8, session_id).unwrap_err();
+        assert!(err.to_string().contains("does not belong to connection 8"));
+
+        worker.close_connection_sessions(7).unwrap();
+        let err = worker
+            .handle_procedure_request(
+                7,
+                &ProcedureInvokeRequest::new(session_id, "app/mod/proc", b"payload".to_vec()),
+            )
+            .now_or_never()
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_implements_worker_local_interface() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(1).unwrap();
+        let local = new_session_bound_worker_runtime(worker.clone(), session_id);
+        let local: &dyn WorkerLocal = local.as_ref();
+        let opened = local.open_async().await.unwrap();
+        local
+            .execute_async(opened, WorkerExecute::BeginTx)
+            .await
+            .unwrap();
+        local
+            .put_async(opened, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        local
+            .put_async(opened, b"b".to_vec(), b"2".to_vec())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            local.get_async(opened, b"a").await.unwrap(),
+            Some(b"1".to_vec())
+        );
+        assert_eq!(
+            local.range_async(opened, b"a", b"z").await.unwrap().len(),
+            2
+        );
+        local
+            .execute_async(opened, WorkerExecute::CommitTx)
+            .await
+            .unwrap();
+        assert_eq!(worker.get(b"a").unwrap(), Some(b"1".to_vec()));
+        local.close_async(opened).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_rollback_discards_staged_writes() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(1).unwrap();
+        let local = new_session_bound_worker_runtime(worker.clone(), session_id);
+        let local: &dyn WorkerLocal = local.as_ref();
+
+        local
+            .execute_async(session_id, WorkerExecute::BeginTx)
+            .await
+            .unwrap();
+        local
+            .put_async(session_id, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            local.get_async(session_id, b"a").await.unwrap(),
+            Some(b"1".to_vec())
+        );
+        local
+            .execute_async(session_id, WorkerExecute::RollbackTx)
+            .await
+            .unwrap();
+
+        assert_eq!(local.get_async(session_id, b"a").await.unwrap(), None);
+        assert_eq!(worker.get(b"a").unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_delete_removes_visible_value() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(1).unwrap();
+        let local = new_session_bound_worker_runtime(worker.clone(), session_id);
+        let local: &dyn WorkerLocal = local.as_ref();
+
+        local
+            .put_async(session_id, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            local.get_async(session_id, b"a").await.unwrap(),
+            Some(b"1".to_vec())
+        );
+        local.delete_async(session_id, b"a").await.unwrap();
+
+        assert_eq!(local.get_async(session_id, b"a").await.unwrap(), None);
+        assert_eq!(worker.get(b"a").unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_storage_uses_worker_partition_id_for_relation_files() {
+        let (log_dir, registry) = test_registry(1);
+        let identity = registry.worker(0).cloned().unwrap();
+        let partition_id = identity.partition_ids[0];
+        let _worker = IoUringWorker::new(
+            identity,
+            1,
+            RoutingMode::ConnectionId,
+            log_dir.clone(),
+            log_dir.clone(),
+            4096,
+            None,
+            registry,
+        )
+        .unwrap();
+        let contract = IoUringXContract::with_log_and_data_dir(
+            Arc::new(TestMetaMgr::new()),
+            None,
+            partition_id,
+            log_dir.clone(),
+        );
+        let schema = test_schema();
+        let table_id = schema.id();
+        contract.create_table(0, &schema).await.unwrap();
+
+        let key_path = TimeSeriesFile::relation_file_path(&log_dir, partition_id, table_id, 0);
+        let value_path = TimeSeriesFile::relation_file_path(&log_dir, partition_id, table_id, 1);
+        assert!(
+            key_path.exists(),
+            "missing relation key file {:?}",
+            key_path
+        );
+        assert!(
+            value_path.exists(),
+            "missing relation value file {:?}",
+            value_path
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_delete_inside_tx_is_visible_to_same_session_only_after_commit() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_a = worker.create_session(1).unwrap();
+        let session_b = worker.create_session(2).unwrap();
+        let local_a = new_session_bound_worker_runtime(worker.clone(), session_a);
+        let local_b = new_session_bound_worker_runtime(worker.clone(), session_b);
+        local_b
+            .put_async(session_b, b"k".to_vec(), b"v".to_vec())
+            .await
+            .unwrap();
+
+        worker
+            .execute_tx(session_a, WorkerExecute::BeginTx)
+            .unwrap();
+        local_a.delete_async(session_a, b"k").await.unwrap();
+
+        assert_eq!(local_a.get_async(session_a, b"k").await.unwrap(), None);
+        assert_eq!(
+            local_b.get_async(session_b, b"k").await.unwrap(),
+            Some(b"v".to_vec())
+        );
+
+        worker
+            .execute_tx(session_a, WorkerExecute::CommitTx)
+            .unwrap();
+
+        assert_eq!(worker.get(b"k").unwrap(), None);
+        assert_eq!(local_b.get_async(session_b, b"k").await.unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_async_put_persists_value() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(1).unwrap();
+        let local = new_session_bound_worker_runtime(worker.clone(), session_id);
+        let local: &dyn WorkerLocal = local.as_ref();
+
+        local
+            .put_async(session_id, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            local.get_async(session_id, b"a").await.unwrap(),
+            Some(b"1".to_vec())
+        );
+        assert_eq!(worker.get(b"a").unwrap(), Some(b"1".to_vec()));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_async_execute_commits_transaction() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_id = worker.create_session(1).unwrap();
+        let local = new_session_bound_worker_runtime(worker.clone(), session_id);
+        let local: &dyn WorkerLocal = local.as_ref();
+
+        local
+            .execute_async(session_id, WorkerExecute::BeginTx)
+            .await
+            .unwrap();
+        local
+            .put_async(session_id, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        local
+            .execute_async(session_id, WorkerExecute::CommitTx)
+            .await
+            .unwrap();
+
+        assert_eq!(worker.get(b"a").unwrap(), Some(b"1".to_vec()));
+    }
+
+    #[test]
+    fn worker_can_transfer_connection_sessions_between_partitions() {
+        let (log_dir, registry) = test_registry(2);
+        let source = test_worker(0, 2, &log_dir, &log_dir, registry.clone(), None);
+        let target = test_worker(1, 2, &log_dir, &log_dir, registry.clone(), None);
+
+        let conn_id = 41;
+        let session_a = source.create_session(conn_id).unwrap();
+        let session_b = source.create_session(conn_id).unwrap();
+        let target_identity = registry.worker(1).unwrap();
+        let action = SessionOpenTransferAction::new(
+            7,
+            SessionOpenConfig::new(session_a, target_identity.worker_id, 1),
+        );
+
+        let transferred = source
+            .prepare_connection_transfer(conn_id, Some(action))
+            .unwrap();
+        assert_eq!(transferred.len(), 2);
+        assert!(source.get_for_connection(conn_id, session_a, b"k").is_err());
+
+        target
+            .adopt_connection_sessions(conn_id, &transferred)
+            .unwrap();
+        assert_eq!(
+            target
+                .open_session_with_config(conn_id, action.config())
+                .unwrap(),
+            session_a
+        );
+        target
+            .put_for_connection(conn_id, session_b, b"k".to_vec(), b"v".to_vec())
+            .unwrap();
+        assert_eq!(
+            target.get_for_connection(conn_id, session_b, b"k").unwrap(),
+            Some(b"v".to_vec())
+        );
+    }
+
+    #[test]
+    fn worker_rejects_transfer_with_active_transaction() {
+        let (log_dir, registry) = test_registry(2);
+        let worker = test_worker(0, 2, &log_dir, &log_dir, registry.clone(), None);
+        let conn_id = 51;
+        let session_id = worker.create_session(conn_id).unwrap();
+        worker
+            .execute_tx(session_id, WorkerExecute::BeginTx)
+            .unwrap();
+
+        let err = worker
+            .prepare_connection_transfer(
+                conn_id,
+                Some(SessionOpenTransferAction::new(
+                    1,
+                    SessionOpenConfig::new(session_id, registry.worker(1).unwrap().worker_id, 1),
+                )),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot be transferred"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_snapshot_isolation_hides_later_commits_from_existing_tx() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_a = worker.create_session(1).unwrap();
+        let session_b = worker.create_session(2).unwrap();
+        worker
+            .execute_tx(session_a, WorkerExecute::BeginTx)
+            .unwrap();
+        let local_a = new_session_bound_worker_runtime(worker.clone(), session_a);
+        let local_b = new_session_bound_worker_runtime(worker.clone(), session_b);
+        local_b
+            .put_async(session_b, b"k".to_vec(), b"v1".to_vec())
+            .await
+            .unwrap();
+
+        assert_eq!(local_a.get_async(session_a, b"k").await.unwrap(), None);
+        assert_eq!(
+            local_b.get_async(session_b, b"k").await.unwrap(),
+            Some(b"v1".to_vec())
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_snapshot_isolation_range_stays_stable_for_existing_tx() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_a = worker.create_session(1).unwrap();
+        let session_b = worker.create_session(2).unwrap();
+        let local_a = new_session_bound_worker_runtime(worker.clone(), session_a);
+        let local_b = new_session_bound_worker_runtime(worker.clone(), session_b);
+        local_b
+            .put_async(session_b, b"a".to_vec(), b"1".to_vec())
+            .await
+            .unwrap();
+        worker
+            .execute_tx(session_a, WorkerExecute::BeginTx)
+            .unwrap();
+        local_b
+            .put_async(session_b, b"b".to_vec(), b"2".to_vec())
+            .await
+            .unwrap();
+
+        let rows = local_a.range_async(session_a, b"a", b"z").await.unwrap();
+        assert_eq!(
+            rows,
+            vec![KvItem {
+                key: b"a".to_vec(),
+                value: b"1".to_vec()
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worker_first_committer_wins_without_locks() {
+        let (log_dir, registry) = test_registry(1);
+        let worker = test_worker(0, 1, &log_dir, &log_dir, registry, None);
+
+        let session_a = worker.create_session(1).unwrap();
+        let session_b = worker.create_session(2).unwrap();
+        worker
+            .execute_tx(session_a, WorkerExecute::BeginTx)
+            .unwrap();
+        worker
+            .execute_tx(session_b, WorkerExecute::BeginTx)
+            .unwrap();
+        let local_a = new_session_bound_worker_runtime(worker.clone(), session_a);
+        let local_b = new_session_bound_worker_runtime(worker.clone(), session_b);
+        local_a
+            .put_async(session_a, b"k".to_vec(), b"v1".to_vec())
+            .await
+            .unwrap();
+        local_b
+            .put_async(session_b, b"k".to_vec(), b"v2".to_vec())
+            .await
+            .unwrap();
+
+        worker
+            .execute_tx(session_a, WorkerExecute::CommitTx)
+            .unwrap();
+        let err = worker
+            .execute_tx(session_b, WorkerExecute::CommitTx)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("write-write conflict"));
+        assert_eq!(worker.get(b"k").unwrap(), Some(b"v1".to_vec()));
+    }
+}

@@ -1,5 +1,5 @@
 use crate::interface::kernel;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 
 pub fn host_query(query_in: Vec<u8>) -> Vec<u8> {
     kernel::query_internal(&query_in)
@@ -35,6 +35,11 @@ pub fn host_get(get_in: Vec<u8>, worker_local: Option<&WorkerLocalRef>) -> Vec<u
 pub fn host_put(put_in: Vec<u8>, worker_local: Option<&WorkerLocalRef>) -> Vec<u8> {
     kernel::put_internal_with_worker_local(&put_in, worker_local)
         .unwrap_or_else(|e| panic!("worker-local put is not available: {}", e))
+}
+
+pub fn host_delete(delete_in: Vec<u8>, worker_local: Option<&WorkerLocalRef>) -> Vec<u8> {
+    kernel::delete_internal_with_worker_local(&delete_in, worker_local)
+        .unwrap_or_else(|e| panic!("worker-local delete is not available: {}", e))
 }
 
 pub fn host_range(range_in: Vec<u8>, worker_local: Option<&WorkerLocalRef>) -> Vec<u8> {

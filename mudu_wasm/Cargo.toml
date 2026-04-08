@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["transpile"]
-macro = ["sys_interface/wasip1", "sys_interface/component-model"]
+macro = ["sys_interface/component-model"]
 transpile = ["sys_interface/component-model", "sys_interface/async"]
 
 [lib]

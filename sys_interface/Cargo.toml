@@ -8,7 +8,6 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = ["component-model"]
-wasip1 = []
 wasip2 = ["component-model"]
 component-model = []
 async = []

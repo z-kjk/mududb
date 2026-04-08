@@ -2,15 +2,15 @@ use clap::Parser;
 use mudu::common::result::RS;
 use mudu::common::xid::XID;
 use mudu_binding::universal::uni_session_open_argv::UniSessionOpenArgv;
-use mudu_cli::management::{ServerTopology, fetch_server_topology};
+use mudu_cli::management::{fetch_server_topology, ServerTopology};
 use mudu_contract::database::sql_stmt_text::SQLStmtText;
 use mudu_utils::debug::debug_serve;
 use mudu_utils::notifier::NotifyWait;
 use mudu_utils::task::spawn_task;
 use mudu_utils::task_trace;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier as StdBarrier;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use sys_interface::async_api::{
@@ -161,14 +161,14 @@ impl ProgressReporter {
         let handle = thread::Builder::new()
             .name(format!("ycsb-progress-{}", phase.as_str()))
             .spawn(move || {
-                let start = Instant::now();
+                let start = mudu_sys::time::instant_now();
                 let mut last_completed = 0;
                 let mut last_report = start;
                 loop {
-                    thread::sleep(PROGRESS_REPORT_INTERVAL);
+                    mudu_sys::task::sleep_blocking(PROGRESS_REPORT_INTERVAL);
                     let started = thread_tracker.started.load(Ordering::Relaxed).min(total);
                     let completed = thread_tracker.completed.load(Ordering::Relaxed).min(total);
-                    let now = Instant::now();
+                    let now = mudu_sys::time::instant_now();
                     let delta = completed.saturating_sub(last_completed);
                     let delta_secs = now.duration_since(last_report).as_secs_f64().max(0.000_001);
                     let total_secs = now.duration_since(start).as_secs_f64().max(0.000_001);
@@ -319,7 +319,7 @@ fn run_sync_mode(args: Args) -> RS<()> {
     let value_template = Arc::new(build_value(args.field_length));
     let routing = Arc::new(load_partition_routing_sync(partition_count)?);
 
-    let load_start = Instant::now();
+    let load_start = mudu_sys::time::instant_now();
     run_workers_sync(
         &args,
         connection_count,
@@ -329,7 +329,7 @@ fn run_sync_mode(args: Args) -> RS<()> {
     )?;
     let load_elapsed = load_start.elapsed();
 
-    let run_start = Instant::now();
+    let run_start = mudu_sys::time::instant_now();
     let counters = run_workers_sync(
         &args,
         connection_count,
@@ -356,7 +356,7 @@ async fn run_async(args: Args) -> RS<()> {
     let value_template = Arc::new(build_value(args.field_length));
     let routing = Arc::new(load_partition_routing_async(partition_count).await?);
 
-    let load_start = Instant::now();
+    let load_start = mudu_sys::time::instant_now();
     run_workers_async(
         &args,
         connection_count,
@@ -367,7 +367,7 @@ async fn run_async(args: Args) -> RS<()> {
     .await?;
     let load_elapsed = load_start.elapsed();
 
-    let run_start = Instant::now();
+    let run_start = mudu_sys::time::instant_now();
     let counters = run_workers_async(
         &args,
         connection_count,
@@ -901,18 +901,21 @@ async fn run_run_phase_async(
         mark_progress_started(progress, 1);
         let op = choose_op(&args.workload, rng);
         let result = if transaction_enabled(args, WorkerPhase::Run) {
-            run_in_transaction_async(xid, execute_run_op_async(
+            run_in_transaction_async(
                 xid,
-                counters,
-                rng,
-                connection_count,
-                partition_id,
-                args,
-                value_template,
-                next_insert,
-                &mut owned_keys,
-                op,
-            ))
+                execute_run_op_async(
+                    xid,
+                    counters,
+                    rng,
+                    connection_count,
+                    partition_id,
+                    args,
+                    value_template,
+                    next_insert,
+                    &mut owned_keys,
+                    op,
+                ),
+            )
             .await
         } else {
             execute_run_op_async(

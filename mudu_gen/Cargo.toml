@@ -12,13 +12,10 @@ sql_parser = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-wit = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-mudu_type = { workspace = true }
-mudu_contract = { workspace = true }
 askama = {workspace = true}
 serde = { workspace = true }
 rust-format = "0.3.4"
 paste = { workspace = true }
-lazy_static = { workspace = true }
 mudu_binding = {workspace = true}
 [build-dependencies]
 md-5 = { workspace = true }

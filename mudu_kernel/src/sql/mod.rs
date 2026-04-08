@@ -1,7 +1,16 @@
+#![allow(dead_code)]
+
 mod cmp_pred;
+mod copy_layout;
+mod value_codec;
 
 pub mod stmt_cmd_run;
 
+pub mod binder;
+pub mod bound_stmt;
+pub mod describer;
+pub mod plan_ctx;
+pub mod planner;
 pub mod proj_list;
 
 pub mod stmt_cmd;

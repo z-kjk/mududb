@@ -4,9 +4,9 @@ use crate::db_libsql_async::result_set::{LibSQLAsyncResultSet, ResultSetLease};
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use lazy_static::lazy_static;
-use libsql::{Builder, Connection, Database, Statement, Transaction, params_from_iter};
+use libsql::{params_from_iter, Builder, Connection, Database, Statement, Transaction};
 use mudu::common::result::RS;
-use mudu::common::xid::{XID, new_xid};
+use mudu::common::xid::{new_xid, XID};
 use mudu::error::ec::EC;
 use mudu::error::err::MError;
 use mudu::m_error;
@@ -158,7 +158,12 @@ impl PreparedStmtImpl {
             .lock()
             .map_err(|_| m_error!(EC::MutexError, "lock prepared stmt error"))?
             .take()
-            .ok_or_else(|| m_error!(EC::ExistingSuchElement, "prepared statement is still in use"))
+            .ok_or_else(|| {
+                m_error!(
+                    EC::ExistingSuchElement,
+                    "prepared statement is still in use"
+                )
+            })
     }
 
     fn restore_prepared(&self, prepared: Prepared) -> RS<()> {
@@ -392,11 +397,11 @@ impl ResultSetLease for PreparedSlotLease {
 
 #[cfg(test)]
 mod tests {
-    use libsql::{Builder, Value, params};
+    use libsql::{params, Builder, Value};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_db_path(label: &str) -> String {
-        let nanos = SystemTime::now()
+        let nanos = mudu_sys::time::system_time_now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();

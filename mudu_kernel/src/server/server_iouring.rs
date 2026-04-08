@@ -1,0 +1,343 @@
+use crate::server::frame_dispatch::{dispatch_frame_async, try_decode_next_frame};
+use crate::server::server::IoUringTcpServerConfig;
+use crate::server::worker::IoUringWorker;
+use crate::server::worker_loop_stats::WorkerLoopStats;
+use crate::server::worker_mailbox::WorkerMailboxMsg;
+use crate::server::worker_ring_loop::WorkerRingLoop;
+use crossbeam_queue::SegQueue;
+use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
+use mudu_contract::protocol::Frame;
+use mudu_utils::notifier::Waiter;
+use std::os::fd::{IntoRawFd, RawFd};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use tracing::debug;
+
+pub(crate) struct RecoveryCoordinator {
+    total_workers: usize,
+    state: Mutex<RecoveryState>,
+    condvar: Condvar,
+}
+
+#[derive(Default)]
+struct RecoveryState {
+    recovered_workers: usize,
+    failed: bool,
+}
+
+pub(crate) fn sync_serve_iouring(mut cfg: IoUringTcpServerConfig, stop: Waiter) -> RS<()> {
+    if cfg.worker_count() == 0 {
+        return Err(m_error!(EC::ParseErr, "invalid io_uring worker count"));
+    }
+    let listen_addr: std::net::SocketAddr = format!("{}:{}", cfg.listen_ip(), cfg.listen_port())
+        .parse()
+        .map_err(|e| m_error!(EC::ParseErr, "parse io_uring tcp listen address error", e))?;
+    let prebound_listener = cfg.take_prebound_listener();
+    let conn_id_alloc = Arc::new(AtomicU64::new(1));
+    let mailboxes: Vec<_> = (0..cfg.worker_count())
+        .map(|_| Arc::new(SegQueue::<WorkerMailboxMsg>::new()))
+        .collect();
+    let mailbox_fds: Vec<_> = (0..cfg.worker_count())
+        .map(|_| create_mailbox_event_fd())
+        .collect::<RS<Vec<_>>>()?;
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let recovery_coordinator = Arc::new(RecoveryCoordinator::new(cfg.worker_count()));
+
+    let stop_for_notifier = stop.clone();
+    let shutdown_mailboxes = mailboxes.clone();
+    let shutdown_mailbox_fds = mailbox_fds.clone();
+    let notifier_stop_flag = stop_flag.clone();
+    let notifier = mudu_sys::task::spawn_thread_named("iouring-shutdown-notifier", move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                m_error!(
+                    EC::TokioErr,
+                    "create runtime for io_uring shutdown notifier error",
+                    e
+                )
+            })?;
+        runtime.block_on(stop_for_notifier.wait());
+        notifier_stop_flag.store(true, Ordering::Relaxed);
+        for (mailbox, fd) in shutdown_mailboxes
+            .into_iter()
+            .zip(shutdown_mailbox_fds.into_iter())
+        {
+            mailbox.push(WorkerMailboxMsg::Shutdown);
+            notify_mailbox_fd(fd)?;
+        }
+        debug!("notify shutdown");
+        Ok(())
+    })?;
+
+    let mut handles = Vec::with_capacity(cfg.worker_count());
+    for worker_id in 0..cfg.worker_count() {
+        let listen_addr = listen_addr;
+        let conn_id_alloc = conn_id_alloc.clone();
+        let mailbox = mailboxes[worker_id].clone();
+        let all_mailboxes = mailboxes.clone();
+        let all_mailbox_fds = mailbox_fds.clone();
+        let procedure_runtime = cfg.procedure_runtime_for_worker(worker_id);
+        let worker_identity = cfg
+            .worker_registry()
+            .worker(worker_id)
+            .cloned()
+            .ok_or_else(|| {
+                m_error!(
+                    EC::NoSuchElement,
+                    format!("missing worker identity {}", worker_id)
+                )
+            })?;
+        let worker_registry = cfg.worker_registry();
+        let routing_mode = cfg.routing_mode();
+        let data_dir = cfg.data_dir().to_string();
+        let log_dir = cfg.log_dir().to_string();
+        let log_chunk_size = cfg.log_chunk_size();
+        let log_batching = cfg.log_batching();
+        let worker_count = cfg.worker_count();
+        let listener = match &prebound_listener {
+            Some(listener) => Some(
+                listener
+                    .try_clone()
+                    .map_err(|e| m_error!(EC::NetErr, "clone tcp listener error", e))?,
+            ),
+            None => None,
+        };
+        let stop = stop_flag.clone();
+        let recovery_coordinator = recovery_coordinator.clone();
+        let mailbox_fd = mailbox_fds[worker_id];
+        let handle = mudu_sys::task::spawn_thread_named(
+            format!("iouring-ring-worker-{worker_id}"),
+            move || {
+                let listener_fd = match listener {
+                    Some(listener) => listener.into_raw_fd(),
+                    None => create_listener_fd(listen_addr)?,
+                };
+                let worker = IoUringWorker::new_with_log_batching(
+                    worker_identity,
+                    worker_count,
+                    routing_mode,
+                    log_dir.clone(),
+                    data_dir.clone(),
+                    log_chunk_size,
+                    log_batching,
+                    procedure_runtime,
+                    worker_registry,
+                )?;
+                let mut loop_state = WorkerRingLoop::new(
+                    worker,
+                    listener_fd,
+                    mailbox_fd,
+                    mailbox,
+                    all_mailboxes,
+                    all_mailbox_fds,
+                    conn_id_alloc,
+                    recovery_coordinator,
+                    stop,
+                )?;
+                let r = loop_state.run();
+                r
+            },
+        )?;
+        handles.push(handle);
+    }
+
+    let mut worker_stats = Vec::<WorkerLoopStats>::with_capacity(cfg.worker_count());
+    for handle in handles {
+        let result = handle
+            .join()
+            .map_err(|_| m_error!(EC::ThreadErr, "join io_uring worker error"))?;
+        worker_stats.push(result?);
+    }
+
+    let notify_result = notifier
+        .join()
+        .map_err(|_| m_error!(EC::ThreadErr, "join io_uring shutdown notifier error"))?;
+    notify_result?;
+
+    for fd in mailbox_fds {
+        unsafe {
+            libc::close(fd);
+        }
+    }
+    log_worker_stats(&worker_stats);
+    Ok(())
+}
+
+impl RecoveryCoordinator {
+    pub(crate) fn new(total_workers: usize) -> Self {
+        Self {
+            total_workers,
+            state: Mutex::new(RecoveryState::default()),
+            condvar: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn worker_succeeded(&self) -> RS<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| m_error!(EC::InternalErr, "recovery coordinator lock poisoned"))?;
+        if state.failed {
+            return Err(m_error!(
+                EC::ThreadErr,
+                "worker recovery aborted because another worker failed"
+            ));
+        }
+        state.recovered_workers += 1;
+        if state.recovered_workers == self.total_workers {
+            self.condvar.notify_all();
+            return Ok(());
+        }
+        // Recovery must be complete on every worker before the service loop
+        // starts. If one worker fails recovery, wake everybody and abort
+        // instead of leaving the successful workers stuck forever.
+        while !state.failed && state.recovered_workers < self.total_workers {
+            state = self.condvar.wait(state).map_err(|_| {
+                m_error!(
+                    EC::InternalErr,
+                    "recovery coordinator condvar wait poisoned"
+                )
+            })?;
+        }
+        if state.failed {
+            return Err(m_error!(
+                EC::ThreadErr,
+                "worker recovery aborted because another worker failed"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn worker_failed(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.failed = true;
+            self.condvar.notify_all();
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub async fn dispatch_frame_iouring(
+    worker: &IoUringWorker,
+    conn_id: u64,
+    frame: &Frame,
+) -> RS<crate::server::async_func_task::HandleResult> {
+    dispatch_frame_async(worker, conn_id, frame).await
+}
+
+#[allow(dead_code)]
+pub fn try_decode_next_frame_iouring(buf: &[u8]) -> RS<Option<(Frame, usize)>> {
+    try_decode_next_frame(buf)
+}
+
+fn create_listener_fd(listen_addr: std::net::SocketAddr) -> RS<RawFd> {
+    mudu_sys::net::create_tcp_listener_fd(listen_addr, 1024)
+}
+
+pub fn set_connection_options(fd: RawFd) -> RS<()> {
+    mudu_sys::net::set_tcp_nodelay(fd)
+}
+
+fn create_mailbox_event_fd() -> RS<RawFd> {
+    create_event_fd("create io_uring worker mailbox eventfd error")
+}
+
+fn create_event_fd(message: &str) -> RS<RawFd> {
+    mudu_sys::sync::eventfd().map_err(|e| m_error!(EC::NetErr, message, e))
+}
+
+pub(super) fn notify_mailbox_fd(fd: RawFd) -> RS<()> {
+    notify_event_fd(fd, "write io_uring worker mailbox eventfd error")
+}
+
+fn notify_event_fd(fd: RawFd, message: &str) -> RS<()> {
+    mudu_sys::sync::notify_eventfd(fd).map_err(|e| m_error!(EC::NetErr, message, e))
+}
+
+fn log_worker_stats(stats: &[WorkerLoopStats]) {
+    for stat in stats {
+        debug!(
+            "iouring worker stats: \n\
+            worker={}, submit_calls={}, wait_cqe_calls={}, \n\
+            accept_submit={}, mailbox_submit={}, recv_submit={}, send_submit={}, \
+            log_write_submit={}, cqe_accept={}, cqe_mailbox={}, cqe_recv={}, cqe_send={}, \
+            cqe_log_write={}, cqe_close={}, recv_queue_push={}, recv_queue_pop={}, \
+            send_queue_push={}, send_queue_pop={}, mailbox_drained={}, local_register={}",
+            stat.worker_id,
+            stat.submit_calls,
+            stat.wait_cqe_calls,
+            stat.accept_submit,
+            stat.mailbox_submit,
+            stat.recv_submit,
+            stat.send_submit,
+            stat.log_write_submit,
+            stat.cqe_accept,
+            stat.cqe_mailbox,
+            stat.cqe_recv,
+            stat.cqe_send,
+            stat.cqe_log_write,
+            stat.cqe_close,
+            stat.recv_queue_push,
+            stat.recv_queue_pop,
+            stat.send_queue_push,
+            stat.send_queue_pop,
+            stat.mailbox_drained,
+            stat.local_register,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::routing::ConnectionTransfer;
+    use crate::server::transferred_connection::TransferredConnection;
+
+    #[test]
+    fn mailbox_eventfd_accumulates_wakeups() {
+        let fd = create_mailbox_event_fd().unwrap();
+        notify_mailbox_fd(fd).unwrap();
+        notify_mailbox_fd(fd).unwrap();
+
+        let value = mudu_sys::sync::read_eventfd(fd).unwrap();
+        assert_eq!(value, 2);
+
+        mudu_sys::sync::close_fd(fd).unwrap();
+    }
+
+    #[test]
+    fn mailbox_can_store_shutdown_and_transfer_messages() {
+        let mailbox = SegQueue::new();
+        mailbox.push(WorkerMailboxMsg::AdoptConnection(
+            TransferredConnection::new(
+                ConnectionTransfer::new(
+                    11,
+                    1,
+                    crate::server::fsm::ConnectionState::Accepted,
+                    "127.0.0.1:9527".parse().unwrap(),
+                ),
+                -1,
+                Vec::new(),
+                None,
+            ),
+        ));
+        mailbox.push(WorkerMailboxMsg::Shutdown);
+        match mailbox.pop() {
+            Some(WorkerMailboxMsg::AdoptConnection(connection)) => {
+                assert_eq!(connection.transfer().conn_id(), 11);
+                assert_eq!(connection.transfer().target_worker(), 1);
+            }
+            other => panic!("unexpected first mailbox message: {other:?}"),
+        }
+        assert!(matches!(mailbox.pop(), Some(WorkerMailboxMsg::Shutdown)));
+        assert!(mailbox.pop().is_none());
+    }
+}
+
+pub fn sockaddr_to_socket_addr(storage: &mudu_sys::uring::SockAddrBuf) -> RS<std::net::SocketAddr> {
+    mudu_sys::net::sockaddr_to_socket_addr(storage)
+}

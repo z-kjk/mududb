@@ -1,1 +1,9 @@
 pub mod file;
+#[cfg(target_os = "linux")]
+pub mod socket;
+pub(crate) mod user_io;
+#[cfg(target_os = "linux")]
+pub mod worker_ring;
+#[cfg(not(target_os = "linux"))]
+#[path = "worker_ring_stub.rs"]
+pub mod worker_ring;

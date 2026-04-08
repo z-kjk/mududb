@@ -153,11 +153,11 @@ mod tests {
     use std::env::temp_dir;
     use std::fs;
     use std::io::Write;
-    use uuid::Uuid;
 
     #[test]
     fn test_app_package() {
-        let package_file = temp_dir().join(format!("app_json_desc_{}.mpk", Uuid::new_v4()));
+        let package_file =
+            temp_dir().join(format!("app_json_desc_{}.mpk", mudu_sys::random::uuid_v4()));
         let file = fs::File::create(&package_file).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
@@ -189,7 +189,10 @@ mod tests {
 
     #[test]
     fn test_single_module_package_aligns_desc_module_name() {
-        let package_file = temp_dir().join(format!("app_json_align_{}.mpk", Uuid::new_v4()));
+        let package_file = temp_dir().join(format!(
+            "app_json_align_{}.mpk",
+            mudu_sys::random::uuid_v4()
+        ));
         let file = fs::File::create(&package_file).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();

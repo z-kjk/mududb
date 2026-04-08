@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod lock_slot;
 pub mod lock_table;
 

@@ -6,20 +6,25 @@ use mudu_contract::database::entity_set::RecordSet;
 use mudu_contract::{sql_params, sql_stmt};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use sys_interface::sync_api::{mudu_batch, mudu_close, mudu_open, mudu_query};
 
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[test]
 fn create_update_and_delete_user() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
     procedures::create_user(xid, 3, "Carol".to_string(), "carol@example.com".to_string()).unwrap();
 
-    assert_eq!(db.query_count("SELECT COUNT(*) FROM users WHERE user_id = ?", &(3,)), 1);
+    assert_eq!(
+        db.query_count("SELECT COUNT(*) FROM users WHERE user_id = ?", &(3,)),
+        1
+    );
     assert_eq!(
         db.query_string("SELECT name FROM users WHERE user_id = ?", &(3,)),
         Some("Carol".to_string())
@@ -41,13 +46,18 @@ fn create_update_and_delete_user() {
     );
 
     procedures::delete_user(xid, 3).unwrap();
-    assert_eq!(db.query_count("SELECT COUNT(*) FROM users WHERE user_id = ?", &(3,)), 0);
+    assert_eq!(
+        db.query_count("SELECT COUNT(*) FROM users WHERE user_id = ?", &(3,)),
+        0
+    );
     assert!(db.query_wallet(3).is_none());
 }
 
 #[test]
 fn delete_user_rejects_non_zero_balance() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
@@ -60,7 +70,9 @@ fn delete_user_rejects_non_zero_balance() {
 
 #[test]
 fn transfer_funds_moves_balance_and_writes_transaction() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
@@ -79,7 +91,9 @@ fn transfer_funds_moves_balance_and_writes_transaction() {
 
 #[test]
 fn transfer_rejects_self_transfer() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
@@ -89,7 +103,9 @@ fn transfer_rejects_self_transfer() {
 
 #[test]
 fn deposit_withdraw_and_purchase_update_balance_and_transactions() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
@@ -98,7 +114,7 @@ fn deposit_withdraw_and_purchase_update_balance_and_transactions() {
     procedures::purchase(xid, 1, 50, "book".to_string()).unwrap();
 
     assert_eq!(db.query_wallet(1).unwrap().get_balance(), &Some(10100));
-        assert_eq!(
+    assert_eq!(
         db.query_count(
             "SELECT COUNT(*) FROM transactions WHERE trans_type = ?",
             &(String::from("DEPOSIT"),),
@@ -123,7 +139,9 @@ fn deposit_withdraw_and_purchase_update_balance_and_transactions() {
 
 #[test]
 fn withdraw_rejects_insufficient_funds() {
-    let _guard = test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut db = TestDb::new();
     let xid = db.open_session();
 
@@ -187,7 +205,11 @@ impl TestDb {
         rs.next_record().unwrap()
     }
 
-    fn query_count<P: mudu_contract::database::sql_params::SQLParams>(&self, sql: &str, params: &P) -> i64 {
+    fn query_count<P: mudu_contract::database::sql_params::SQLParams>(
+        &self,
+        sql: &str,
+        params: &P,
+    ) -> i64 {
         let rs = mudu_query::<i64>(self.current_session(), sql_stmt!(&sql), params).unwrap();
         rs.next_record().unwrap().unwrap()
     }
@@ -201,7 +223,10 @@ impl TestDb {
         rs.next_record().unwrap()
     }
 
-    fn query_records<R: mudu_contract::database::entity::Entity, P: mudu_contract::database::sql_params::SQLParams>(
+    fn query_records<
+        R: mudu_contract::database::entity::Entity,
+        P: mudu_contract::database::sql_params::SQLParams,
+    >(
         &self,
         sql: &str,
         params: &P,
@@ -227,10 +252,9 @@ impl Drop for TestDb {
 }
 
 fn unique_db_path() -> PathBuf {
-    let nanos = SystemTime::now()
+    let nanos = mudu_sys::time::system_time_now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("wallet-procedure-test-{nanos}.db"))
 }
-

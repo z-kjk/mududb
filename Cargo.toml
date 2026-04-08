@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "mudu",
+    "mudu_sys",
     "mudu_adapter",
     "mudu_type",
     "mudu_contract",
@@ -36,6 +37,7 @@ test_utils = { path = "test_utils" }
 sys_interface = { path = "sys_interface" }
 mudu_adapter = { path = "mudu_adapter" }
 mudu = { path = "mudu" }
+mudu_sys = { path = "mudu_sys" }
 mudu_binding = { path = "mudu_binding" }
 md-5 = { version = "0.11.0-rc.0" }
 sql_parser = { path = "sql_parser" }

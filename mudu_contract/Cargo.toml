@@ -8,6 +8,7 @@ mudu = { workspace = true }
 mudu_type = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+rmp-serde = { workspace = true }
 scc = { workspace = true }
 byteorder = { workspace = true }
 lazy_static = { workspace = true }

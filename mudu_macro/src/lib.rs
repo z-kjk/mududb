@@ -44,15 +44,6 @@ pub fn mudu_proc(_args: TokenStream, input: TokenStream) -> TokenStream {
         fn_name.span(),
     );
 
-    let fn_wrapper_ident = syn::Ident::new(
-        &format!(
-            "{}{}",
-            mudu_contract::procedure::proc::MUDU_PROC_PREFIX,
-            fn_name
-        ),
-        fn_name.span(),
-    );
-
     let fn_inner_ident = syn::Ident::new(
         &format!(
             "{}{}",
@@ -195,15 +186,6 @@ world mudu-app-{} {{
             )
         }
 
-        #[unsafe(no_mangle)]
-        pub extern "C" fn #fn_wrapper_ident (p1_ptr: *const u8, p1_len: usize, p2_ptr: *mut u8, p2_len: usize) -> i32 {
-            ::mudu_binding::procedure::procedure_invoke::invoke_wrapper(
-                p1_ptr, p1_len,
-                p2_ptr, p2_len,
-                #fn_inner_ident
-            )
-        }
-
         pub fn #fn_inner_ident(
             param: &::mudu_contract::procedure::procedure_param::ProcedureParam,
         ) -> ::mudu::common::result::RS<::mudu_contract::procedure::procedure_result::ProcedureResult> {
@@ -216,10 +198,7 @@ world mudu-app-{} {{
         pub fn #fn_inner_ident_p2(
             param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
         ) -> ::mudu::common::result::RS<::mudu_contract::procedure::procedure_result::ProcedureResult> {
-            // generate tuple desc
-            let desc = <(#(#types),*)  as ::mudu_contract::tuple::tuple_datum::TupleDatum>::tuple_desc_static(&#code_arg_names);
-
-            #invoke_handling
+            #fn_inner_ident(&param)
         }
 
         pub fn #fn_argv_desc()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {

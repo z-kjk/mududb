@@ -5,7 +5,7 @@ use mudu_contract::database::sql::DBConn;
 use mudu_contract::procedure::proc_desc::ProcDesc;
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use mudu_utils::task_id::TaskID;
 use std::sync::Arc;
 

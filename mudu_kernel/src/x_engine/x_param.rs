@@ -48,3 +48,10 @@ pub struct PUpdateKeyValue {
     pub key: VecDatum,
     pub value: VecDatum,
 }
+
+#[derive(Clone, Debug)]
+pub struct PDeleteKeyValue {
+    pub xid: XID,
+    pub table_id: OID,
+    pub key: VecDatum,
+}

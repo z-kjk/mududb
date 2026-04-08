@@ -28,7 +28,7 @@ use crate::service::app_inst::AppInst;
 use crate::service::runtime::Runtime;
 use actix_cors::Cors;
 use actix_web::http::StatusCode;
-use actix_web::{App, HttpResponse, HttpServer, Responder, delete, get, post, web};
+use actix_web::{delete, get, post, web, App, HttpResponse, HttpServer, Responder};
 use async_trait::async_trait;
 use base64::Engine;
 use mudu::common::id::OID;
@@ -217,7 +217,7 @@ pub async fn serve_http_api_on_listener_with_stop(
 
     if let Some(stop) = stop {
         let handle = server.handle();
-        tokio::spawn(async move {
+        mudu_sys::task::spawn_tokio(async move {
             stop.wait().await;
             handle.stop(true).await;
         });
@@ -514,7 +514,7 @@ async fn find_app(app_mgr: &dyn AppMgr, app_name: &str) -> RS<AppListItem> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use actix_web::{App, test};
+    use actix_web::{test, App};
     #[cfg(target_os = "linux")]
     use mudu::common::app_info::AppInfo;
     #[cfg(target_os = "linux")]
@@ -523,7 +523,7 @@ mod test {
     use mudu_contract::procedure::procedure_result::ProcedureResult;
     use mudu_contract::tuple::tuple_datum::TupleDatum;
     #[cfg(target_os = "linux")]
-    use mudu_kernel::server_ur::procedure_runtime::ProcInvoker;
+    use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
     #[cfg(target_os = "linux")]
     use std::sync::Mutex;
 
@@ -689,7 +689,7 @@ mod test {
             })
         }
 
-        async fn create_invoker(&self, _cfg: &MuduDBCfg) -> RS<Arc<dyn ProcInvoker>> {
+        async fn create_invoker(&self, _cfg: &MuduDBCfg) -> RS<Arc<dyn AsyncFuncInvoker>> {
             Err(m_error!(EC::NotImplemented, "unused in test"))
         }
     }
@@ -700,7 +700,7 @@ mod test {
         let log_dir =
             std::env::temp_dir().join(format!("http_api_test_{}", mudu::common::id::gen_oid()));
         let registry =
-            mudu_kernel::server_ur::worker_registry::load_or_create_worker_registry(&log_dir, 4)
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 4)
                 .unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let api = IoUringHttpApi::with_client_factory(

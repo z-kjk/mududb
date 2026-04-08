@@ -6,7 +6,7 @@ use crate::backend::mududb_cfg::MuduDBCfg;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use mudu_kernel::server_ur::worker_registry::WorkerRegistry;
+use mudu_kernel::server::worker_registry::WorkerRegistry;
 use mudu_utils::notifier::Waiter;
 use std::sync::Arc;
 use std::sync::mpsc;

@@ -1,8 +1,19 @@
 use crate::contract::cmd_exec::CmdExec;
+use crate::contract::meta_mgr::MetaMgr;
+use crate::contract::table_desc::TableDesc;
+use crate::x_engine::api::{OptRead, Predicate, RangeData, VecSelTerm, XContract};
+use async_std::fs::File;
 use async_trait::async_trait;
+use csv_async::AsyncWriter;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
+use mudu::common::xid::XID;
+use mudu::error::ec::EC as ER;
+use mudu::m_error;
+use mudu_contract::tuple::datum_desc::DatumDesc;
 use mudu_utils::sync::a_mutex::AMutex;
+use std::ops::Bound;
+use std::sync::Arc;
 
 pub struct SaveToFile {
     inner: AMutex<_SaveToFile>,
@@ -10,24 +21,206 @@ pub struct SaveToFile {
 
 struct _SaveToFile {
     file_path: String,
-    table_name: OID,
+    xid: XID,
+    table_id: OID,
     key_indexing: Vec<usize>,
     value_indexing: Vec<usize>,
+    x_contract: Arc<dyn XContract>,
+    meta_mgr: Arc<dyn MetaMgr>,
+    affected_rows: u64,
+}
+
+impl SaveToFile {
+    pub fn new(
+        file_path: String,
+        xid: XID,
+        table_id: OID,
+        key_indexing: Vec<usize>,
+        value_indexing: Vec<usize>,
+        x_contract: Arc<dyn XContract>,
+        meta_mgr: Arc<dyn MetaMgr>,
+    ) -> Self {
+        Self {
+            inner: AMutex::new(_SaveToFile::new(
+                file_path,
+                xid,
+                table_id,
+                key_indexing,
+                value_indexing,
+                x_contract,
+                meta_mgr,
+            )),
+        }
+    }
 }
 
 #[async_trait]
 impl CmdExec for SaveToFile {
     async fn prepare(&self) -> RS<()> {
-        Ok(())
+        let inner = self.inner.lock().await;
+        inner.prepare().await
     }
 
     async fn run(&self) -> RS<()> {
+        let mut inner = self.inner.lock().await;
+        let rows = inner.save_table().await?;
+        inner.affected_rows = rows;
         Ok(())
     }
 
     async fn affected_rows(&self) -> RS<u64> {
-        todo!()
+        let inner = self.inner.lock().await;
+        Ok(inner.affected_rows)
     }
 }
 
-impl _SaveToFile {}
+impl _SaveToFile {
+    fn new(
+        file_path: String,
+        xid: XID,
+        table_id: OID,
+        key_indexing: Vec<usize>,
+        value_indexing: Vec<usize>,
+        x_contract: Arc<dyn XContract>,
+        meta_mgr: Arc<dyn MetaMgr>,
+    ) -> Self {
+        Self {
+            file_path,
+            xid,
+            table_id,
+            key_indexing,
+            value_indexing,
+            x_contract,
+            meta_mgr,
+            affected_rows: 0,
+        }
+    }
+
+    async fn prepare(&self) -> RS<()> {
+        let table_desc = self.meta_mgr.get_table_by_id(self.table_id).await?;
+        if self.key_indexing.len() != table_desc.key_info().len()
+            || self.value_indexing.len() != table_desc.value_info().len()
+        {
+            return Err(m_error!(ER::IOErr, "column size error"));
+        }
+        let total = self.key_indexing.len() + self.value_indexing.len();
+        Self::validate_indexing(&self.key_indexing, &self.value_indexing, total)
+    }
+
+    async fn save_table(&self) -> RS<u64> {
+        let table_desc = self.meta_mgr.get_table_by_id(self.table_id).await?;
+        let select = Self::build_select(&table_desc);
+        let output_desc = Self::build_output_desc(&table_desc);
+        let cursor = self
+            .x_contract
+            .read_range(
+                self.xid,
+                self.table_id,
+                &RangeData::new(Bound::Unbounded, Bound::Unbounded),
+                &Predicate::CNF(Vec::new()),
+                &select,
+                &OptRead::default(),
+            )
+            .await?;
+
+        let file = File::create(self.file_path.clone()).await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, create csv file {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+        let mut writer = AsyncWriter::from_writer(file);
+        let header = self.reorder_row(&Self::build_header(&table_desc))?;
+        writer.write_record(header).await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, write csv header {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+
+        let mut rows = 0;
+        while let Some(row) = cursor.next().await? {
+            let textual = row.to_textual(&output_desc)?;
+            let ordered = self.reorder_row(&textual)?;
+            writer.write_record(ordered).await.map_err(|e| {
+                m_error!(
+                    ER::IOErr,
+                    format!("save failed, write csv row {} error, {}", self.file_path, e)
+                )
+            })?;
+            rows += 1;
+        }
+        writer.flush().await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, flush csv file {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+        Ok(rows)
+    }
+
+    fn validate_indexing(key_indexing: &[usize], value_indexing: &[usize], total: usize) -> RS<()> {
+        let mut seen = vec![false; total];
+        for idx in key_indexing.iter().chain(value_indexing.iter()) {
+            if *idx >= total {
+                return Err(m_error!(ER::IndexOutOfRange));
+            }
+            if seen[*idx] {
+                return Err(m_error!(ER::IOErr, "duplicate column index"));
+            }
+            seen[*idx] = true;
+        }
+        if seen.iter().any(|item| !item) {
+            return Err(m_error!(ER::IOErr, "column index is not continuous"));
+        }
+        Ok(())
+    }
+
+    fn build_select(table_desc: &TableDesc) -> VecSelTerm {
+        let total = table_desc.key_info().len() + table_desc.value_info().len();
+        VecSelTerm::new((0..total).collect())
+    }
+
+    fn build_output_desc(table_desc: &TableDesc) -> Vec<DatumDesc> {
+        let total = table_desc.key_info().len() + table_desc.value_info().len();
+        (0..total)
+            .map(|attr| {
+                let field = table_desc.get_attr(attr);
+                DatumDesc::new(field.name().clone(), field.type_desc().clone())
+            })
+            .collect()
+    }
+
+    fn build_header(table_desc: &TableDesc) -> Vec<String> {
+        let total = table_desc.key_info().len() + table_desc.value_info().len();
+        (0..total)
+            .map(|attr| table_desc.get_attr(attr).name().clone())
+            .collect()
+    }
+
+    fn reorder_row(&self, textual: &[String]) -> RS<Vec<String>> {
+        let total = self.key_indexing.len() + self.value_indexing.len();
+        if textual.len() != total {
+            return Err(m_error!(ER::IOErr, "row column size error"));
+        }
+        let mut ordered = vec![String::new(); total];
+        for (src, dest) in self.key_indexing.iter().enumerate().chain(
+            self.value_indexing
+                .iter()
+                .enumerate()
+                .map(|(i, idx)| (self.key_indexing.len() + i, idx)),
+        ) {
+            ordered[*dest] = textual[src].clone();
+        }
+        Ok(ordered)
+    }
+}

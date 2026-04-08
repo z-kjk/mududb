@@ -181,7 +181,8 @@ impl PersistedStore {
         }
         let text = fs::read_to_string(path)
             .map_err(|e| m_error!(ER::IOErr, "read pst store file error", e))?;
-        serde_json::from_str(&text).map_err(|e| m_error!(ER::ParseErr, "parse pst store file error", e))
+        serde_json::from_str(&text)
+            .map_err(|e| m_error!(ER::ParseErr, "parse pst store file error", e))
     }
 
     fn save(&self, path: &Path) -> RS<()> {

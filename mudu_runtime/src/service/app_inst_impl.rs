@@ -5,8 +5,7 @@ use crate::service::app_inst::AppInst;
 use crate::service::mudu_package::MuduPackage;
 use crate::service::package_module::PackageModule;
 use crate::service::procedure_invoke_component::ProcedureInvokeComponent;
-use crate::service::procedure_invoke_p1::ProcedureInvoke1;
-use crate::service::runtime_opt::RuntimeTarget;
+use crate::service::runtime_opt::ComponentTarget;
 use async_trait::async_trait;
 use mudu::common::app_info::AppInfo;
 use mudu::common::result::RS;
@@ -17,7 +16,7 @@ use mudu_contract::database::sql::{Context, DBConn};
 use mudu_contract::procedure::proc_desc::ProcDesc;
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use mudu_utils::task_id::{TaskID, new_task_id};
 use scc::HashMap;
 use std::fs::File;
@@ -36,7 +35,7 @@ struct AppInstImplInner {
     schema_mgr: SchemaMgr,
     modules: HashMap<String, PackageModule>,
     _conn: HashMap<u128, DBConn>,
-    runtime_target: RuntimeTarget,
+    component_target: ComponentTarget,
 }
 
 impl AppInstImpl {
@@ -44,7 +43,7 @@ impl AppInstImpl {
         db_path: &String,
         package: &MuduPackage,
         vec_modules: Vec<(String, PackageModule)>,
-        runtime_target: RuntimeTarget,
+        component_target: ComponentTarget,
         enable_async: bool,
     ) -> RS<Self> {
         Ok(Self {
@@ -53,7 +52,7 @@ impl AppInstImpl {
                     db_path,
                     package,
                     vec_modules,
-                    runtime_target,
+                    component_target,
                     enable_async,
                 )
                 .await?,
@@ -91,7 +90,7 @@ impl AppInstImplInner {
         db_path: &String,
         package: &MuduPackage,
         vec_modules: Vec<(String, PackageModule)>,
-        runtime_target: RuntimeTarget,
+        component_target: ComponentTarget,
         enable_async: bool,
     ) -> RS<Self> {
         let modules = HashMap::new();
@@ -112,7 +111,7 @@ impl AppInstImplInner {
             schema_mgr,
             modules,
             _conn: Default::default(),
-            runtime_target,
+            component_target,
         })
     }
 
@@ -146,18 +145,13 @@ impl AppInstImplInner {
         let (procedure, param, new_tx) =
             self.pre_invoke(task_id, mod_name, proc_name, param).await?;
         let xid = param.session_id();
-        let result = match self.runtime_target {
-            RuntimeTarget::P1 => {
-                ProcedureInvoke1::call(&procedure, Default::default(), param, worker_local)
-            }
-            RuntimeTarget::Component(component_target) => ProcedureInvokeComponent::call(
-                &procedure,
-                component_target,
-                Default::default(),
-                param,
-                worker_local,
-            ),
-        };
+        let result = ProcedureInvokeComponent::call(
+            &procedure,
+            self.component_target,
+            Default::default(),
+            param,
+            worker_local,
+        );
         if new_tx {
             if result.is_ok() {
                 Context::commit(xid)?;
@@ -185,24 +179,14 @@ impl AppInstImplInner {
         let (procedure, param, new_tx) =
             self.pre_invoke(task_id, mod_name, proc_name, param).await?;
         let xid = param.session_id();
-        let result = match self.runtime_target {
-            RuntimeTarget::P1 => {
-                return Err(m_error!(
-                    EC::DBInternalError,
-                    "async invocation is only supported for component targets"
-                ));
-            }
-            RuntimeTarget::Component(component_target) => {
-                ProcedureInvokeComponent::call_async(
-                    &procedure,
-                    component_target,
-                    Default::default(),
-                    param,
-                    worker_local,
-                )
-                .await
-            }
-        };
+        let result = ProcedureInvokeComponent::call_async(
+            &procedure,
+            self.component_target,
+            Default::default(),
+            param,
+            worker_local,
+        )
+        .await;
         if new_tx {
             if result.is_ok() {
                 Context::commit_async(xid).await?;
@@ -294,7 +278,9 @@ async fn initdb(
     enable_async: bool,
 ) -> RS<()> {
     let init_db_lock = PathBuf::from(&db_path).join(format!("{}.lock", app_name));
-    if init_db_lock.exists() && is_schema_initialized(db_path, app_name, schema_mgr, enable_async).await? {
+    if init_db_lock.exists()
+        && is_schema_initialized(db_path, app_name, schema_mgr, enable_async).await?
+    {
         return Ok(());
     }
     let conn = new_conn(db_path, app_name, enable_async).await?;

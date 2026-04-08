@@ -27,9 +27,8 @@ impl Backend {
     pub fn sync_serve_with_stop(cfg: MuduDBCfg, stop: Waiter) -> RS<()> {
         info!(
             server_mode = ?cfg.server_mode,
-            runtime_target = ?cfg.runtime_target(),
+            component_target = ?cfg.component_target(),
             enable_async = cfg.enable_async,
-            enable_p2 = cfg.enable_p2,
             listen_ip = %cfg.listen_ip,
             http_listen_port = cfg.http_listen_port,
             pg_listen_port = cfg.pg_listen_port,
@@ -102,7 +101,7 @@ impl Backend {
         service.register(TaskWrapper::new_async_local(ls, accept_task))?;
 
         let session_task =
-            SessionHandleTask::new(cfg.data_path.clone(), receivers, canceller.clone());
+            SessionHandleTask::new(cfg.db_path.clone(), receivers, canceller.clone());
         let ls = LocalSet::new();
         service.register(TaskWrapper::new_async_local(ls, session_task))?;
         Ok(())

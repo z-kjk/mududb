@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod _fuzz;
 
 pub mod meta_mgr;

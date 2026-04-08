@@ -41,20 +41,31 @@ impl MetaMgrImpl {
             }
         }
 
-        Ok(Self {
+        let this = Self {
             path: path.to_str().unwrap().to_string(),
             id2table: Default::default(),
             name2id: Default::default(),
             table: Default::default(),
-        })
+        };
+
+        for (table_name, table_info) in hash_table {
+            let table_id = table_info.schema().id();
+            let _ = this
+                .table
+                .insert_sync(table_name.clone(), table_info.clone());
+            let _ = this.id2table.insert_sync(table_id, table_info);
+            let _ = this.name2id.insert_sync(table_name, table_id);
+        }
+
+        Ok(this)
     }
 
-    pub fn get_table_by_id(&self, oid: OID) -> Option<TableInfo> {
+    pub fn lookup_table_info_by_id(&self, oid: OID) -> Option<TableInfo> {
         let opt = self.id2table.get_sync(&oid);
         opt.map(|e| e.get().clone())
     }
 
-    pub fn get_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
+    pub fn lookup_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
         let opt = self.table.get_sync(name);
         let table_desc = match opt {
             None => return Ok(None),
@@ -63,7 +74,7 @@ impl MetaMgrImpl {
         Ok(Some(table_desc))
     }
 
-    pub fn _create_table(&self, schema: &SchemaTable) -> RS<()> {
+    pub fn create_table_inner(&self, schema: &SchemaTable) -> RS<()> {
         if !self.table.contains_sync(schema.table_name()) {
             let table_name = schema.table_name().clone();
             let mut pb = PathBuf::from(self.path.clone());
@@ -83,6 +94,25 @@ impl MetaMgrImpl {
         } else {
             return Err(m_error!(ER::ExistingSuchElement, ""));
         }
+        Ok(())
+    }
+
+    pub fn drop_table_inner(&self, oid: OID) -> RS<()> {
+        let table = self
+            .lookup_table_info_by_id(oid)
+            .ok_or_else(|| m_error!(ER::NoSuchElement, format!("no such table {}", oid)))?;
+        let schema = table.schema();
+        let table_name = schema.table_name().clone();
+
+        let mut pb = PathBuf::from(self.path.clone());
+        pb.push(format!("{}.json", table_name));
+        if pb.exists() {
+            fs::remove_file(&pb).map_err(|e| m_error!(ER::IOErr, "remove schema file error", e))?;
+        }
+
+        let _ = self.id2table.remove_sync(&oid);
+        let _ = self.name2id.remove_sync(&table_name);
+        let _ = self.table.remove_sync(&table_name);
         Ok(())
     }
 
@@ -117,7 +147,7 @@ impl MetaMgrImpl {
 #[async_trait]
 impl MetaMgr for MetaMgrImpl {
     async fn get_table_by_id(&self, oid: OID) -> RS<Arc<TableDesc>> {
-        let opt = self.get_table_by_id(oid);
+        let opt = self.lookup_table_info_by_id(oid);
         match opt {
             Some(t) => t.table_desc(),
             None => Err(m_error!(
@@ -128,15 +158,15 @@ impl MetaMgr for MetaMgrImpl {
     }
 
     async fn get_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
-        self.get_table_by_name(name)
+        self.lookup_table_by_name(name)
     }
 
     async fn create_table(&self, schema: &SchemaTable) -> RS<()> {
-        self._create_table(schema)
+        self.create_table_inner(schema)
     }
 
-    async fn drop_table(&self, _oid: OID) -> RS<()> {
-        todo!()
+    async fn drop_table(&self, table_id: OID) -> RS<()> {
+        self.drop_table_inner(table_id)
     }
 }
 

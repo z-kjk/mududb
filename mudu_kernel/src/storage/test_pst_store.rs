@@ -6,8 +6,6 @@ mod _test {
     use crate::contract::timestamp::Timestamp;
     use crate::storage::pst_store_factory::PstStoreFactory;
     use mudu::common::result::RS;
-    use mudu_utils::notifier::NotifyWait;
-
     use mudu_utils::log::log_setup;
     use tokio::sync::oneshot;
     use tracing::{error, info};
@@ -20,7 +18,7 @@ mod _test {
     }
 
     fn _test_pst_store() -> RS<()> {
-        let db = format!("/tmp/test_pst_store_{}", uuid::Uuid::new_v4());
+        let db = format!("/tmp/test_pst_store_{}", mudu_sys::random::uuid_v4());
         let (task, ch) = PstStoreFactory::create(db).unwrap();
         let thd_task = thread::Builder::new().spawn(move || {
             let r = task.run_once();
@@ -45,13 +43,11 @@ mod _test {
                 ops.push_update(i, i, Timestamp::new(2, 3), Default::default());
 
                 ch.async_run(ops).unwrap();
-                let notifier = NotifyWait::new();
                 let mut ops = PstOpList::new();
                 ops.push_delete(i, i);
                 ch.async_run(ops).unwrap();
             }
             let (s, r) = oneshot::channel();
-            let notifier = NotifyWait::new();
             let mut ops = PstOpList::new();
             ops.push_stop(s);
             ch.async_run(ops).unwrap();

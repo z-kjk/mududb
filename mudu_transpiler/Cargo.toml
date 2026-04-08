@@ -13,7 +13,6 @@ mudu_contract = { workspace = true }
 mudu_utils = { workspace = true }
 askama = {workspace = true}
 tree-sitter-rust = { version = "0.24.0" }
-sql_parser = {workspace = true}
 tree-sitter = {workspace = true}
 mudu_type = { workspace = true }
 

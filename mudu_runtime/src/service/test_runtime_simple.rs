@@ -57,12 +57,12 @@ mod tests {
     }
 
     fn db_path() -> String {
-        let n = uuid::Uuid::new_v4().to_string();
+        let n = mudu_sys::random::next_uuid_v4_string();
         let path = PathBuf::from(temp_dir()).join(format!("test_runtime_service_{}", n));
         path.to_str().unwrap().to_string()
     }
 
-    async fn test_async_runtime_simple(enable_component: bool, test_kind: TestProc) -> RS<()> {
+    async fn test_async_runtime_simple(_enable_component: bool, test_kind: TestProc) -> RS<()> {
         let pkg_path = wasm_mod_path();
         let db_path = db_path();
         let enable_async =
@@ -71,7 +71,10 @@ mod tests {
             &pkg_path,
             &db_path,
             None,
-            RuntimeOpt::from_legacy_enable_p2(enable_component, enable_async),
+            RuntimeOpt {
+                component_target: crate::service::runtime_opt::ComponentTarget::P2,
+                enable_async,
+            },
         )
         .await?;
 

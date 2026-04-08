@@ -1,4 +1,4 @@
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -41,8 +41,8 @@ pub fn build_wasi_component_context(worker_local: Option<WorkerLocalRef>) -> Was
 pub mod sync_host {
     use super::WasiContextComponent;
     use crate::service::kernel_function_p2::{
-        host_batch, host_close, host_command, host_fetch, host_get, host_open, host_put, host_query,
-        host_range,
+        host_batch, host_close, host_command, host_delete, host_fetch, host_get, host_open,
+        host_put, host_query, host_range,
     };
     use wasmtime::component::bindgen;
 
@@ -80,6 +80,10 @@ pub mod sync_host {
             host_put(put_in, self.worker_local())
         }
 
+        fn delete(&mut self, delete_in: Vec<u8>) -> Vec<u8> {
+            host_delete(delete_in, self.worker_local())
+        }
+
         fn range(&mut self, range_in: Vec<u8>) -> Vec<u8> {
             host_range(range_in, self.worker_local())
         }
@@ -89,8 +93,9 @@ pub mod sync_host {
 pub mod async_host {
     use super::WasiContextComponent;
     use crate::service::kernel_function_p2_async::{
-        async_host_batch, async_host_close, async_host_command, async_host_fetch, async_host_get,
-        async_host_open, async_host_put, async_host_query, async_host_range,
+        async_host_batch, async_host_close, async_host_command, async_host_delete,
+        async_host_fetch, async_host_get, async_host_open, async_host_put, async_host_query,
+        async_host_range,
     };
     use wasmtime::component::bindgen;
 
@@ -133,6 +138,10 @@ pub mod async_host {
 
         async fn put(&mut self, put_in: Vec<u8>) -> Vec<u8> {
             async_host_put(put_in, self.worker_local()).await
+        }
+
+        async fn delete(&mut self, delete_in: Vec<u8>) -> Vec<u8> {
+            async_host_delete(delete_in, self.worker_local()).await
         }
 
         async fn range(&mut self, range_in: Vec<u8>) -> Vec<u8> {

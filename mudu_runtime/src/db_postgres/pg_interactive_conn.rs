@@ -40,7 +40,7 @@ impl DBConnSync for PGInteractive {
     fn begin_tx(&self) -> RS<XID> {
         let mut conn = self.db_conn.lock().unwrap();
         let transaction = conn.0.transaction().unwrap();
-        let xid = uuid::Uuid::new_v4().as_u128() as XID;
+        let xid = mudu_sys::random::uuid_v4().as_u128() as XID;
         let r = TxPg::new(transaction, xid);
         conn.1 = Some(r);
         Ok(xid)

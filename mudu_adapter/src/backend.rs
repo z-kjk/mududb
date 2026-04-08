@@ -180,11 +180,7 @@ pub async fn mudu_command_async(
     }
 }
 
-pub async fn mudu_batch_async(
-    oid: OID,
-    sql_stmt: &dyn SQLStmt,
-    params: &dyn SQLParams,
-) -> RS<u64> {
+pub async fn mudu_batch_async(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
     match config::driver() {
         Driver::Sqlite => sqlite::mudu_batch_async(oid, sql_stmt, params).await,
         Driver::Postgres | Driver::MySql | Driver::Mudud => Err(mudu::m_error!(

@@ -5,11 +5,24 @@ use mudu::common::buf::Buf;
 pub struct VersionTuple {
     timestamp: Timestamp,
     buf: Buf,
+    deleted: bool,
 }
 
 impl VersionTuple {
     pub fn new(timestamp: Timestamp, buf: Buf) -> VersionTuple {
-        Self { timestamp, buf }
+        Self {
+            timestamp,
+            buf,
+            deleted: false,
+        }
+    }
+
+    pub fn new_delete(timestamp: Timestamp) -> VersionTuple {
+        Self {
+            timestamp,
+            buf: Vec::new(),
+            deleted: true,
+        }
     }
     pub fn timestamp(&self) -> &Timestamp {
         &self.timestamp
@@ -29,5 +42,9 @@ impl VersionTuple {
 
     pub fn mut_tuple(&mut self) -> &mut Buf {
         &mut self.buf
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.deleted
     }
 }

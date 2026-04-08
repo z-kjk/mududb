@@ -28,7 +28,7 @@ impl AsRef<DatValue> for DatValue {
 }
 
 /// Internal memory representation supporting various data types
-/// Uses Box for heap allocation of complex types to avoid large enum variants
+/// Uses Box for time_series allocation of complex types to avoid large enum variants
 enum ValueKind {
     F32(f32),
     F64(f64),
