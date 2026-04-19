@@ -1,12 +1,11 @@
 # Syscall Semantics
 
-## Partition and Worker Identity
+## Worker Identity
 
-In `server_ur`, each worker is identified by a `partition id`.
+In the current runtime path, session routing is expressed in terms of `worker_id`.
 
-- one worker corresponds to one partition id
-- partition id is the routing target for session-local execution
-- once a session is bound to a partition, its requests must be handled by the worker that owns that partition
+- `worker_id` is the routing target for session-local execution
+- once a session is bound to a worker, its requests must be handled by that worker
 
 ## Session Open
 
@@ -15,14 +14,14 @@ In `server_ur`, each worker is identified by a `partition id`.
 The JSON payload is used to describe session routing and session configuration changes. The payload contains at least:
 
 - `session_id`
-- `partition_id`
+- `worker_id`
 
 Example:
 
 ```json
 {
   "session_id": 0,
-  "partition_id": 3
+  "worker_id": 3
 }
 ```
 
@@ -33,14 +32,14 @@ Example:
 - if `session_id == 0`, the kernel creates a new session
 - if `session_id != 0`, the call refers to an existing session and changes that session's configuration
 
-The configuration change described here is the target partition binding carried by the same JSON payload.
+The configuration change described here is the target worker binding carried by the same JSON payload.
 
-## `partition_id` Meaning
+## `worker_id` Meaning
 
-`partition_id` tells the kernel which worker should own the session.
+`worker_id` tells the kernel which worker should own the session.
 
-- if the current connection is already attached to the worker that owns `partition_id`, the session is created or updated there
-- if the current connection is not attached to that worker, the kernel transfers the connection to the worker that owns `partition_id`
+- if the current connection is already attached to the target worker, the session is created or updated there
+- if the current connection is not attached to that worker, the kernel transfers the connection to that worker
 
 After this transfer, the target worker becomes the owner of that session.
 
@@ -60,10 +59,10 @@ This default stays in effect until another session on the same connection explic
 The effective behavior is:
 
 1. Parse the optional JSON argument passed to `open`.
-2. Read `session_id` and `partition_id`.
+2. Read `session_id` and `worker_id`.
 3. If `session_id == 0`, create a new session.
 4. If `session_id != 0`, update the existing session configuration.
-5. Ensure the session is owned by the worker identified by `partition_id`.
+5. Ensure the session is owned by the worker identified by `worker_id`.
 6. If necessary, transfer the current connection to that worker.
 7. Use that worker as the default connection target until another explicit session routing change happens.
 

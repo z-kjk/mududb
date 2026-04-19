@@ -329,6 +329,21 @@ pub fn mudu_command(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) ->
     })
 }
 
+pub fn mudu_batch(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    with_session(oid, |client| {
+        client
+            .batch_execute(&sql_stmt.to_sql_string())
+            .map_err(|e| m_error!(EC::DBInternalError, "execute postgres batch error", e))?;
+        Ok(0)
+    })
+}
+
 pub async fn mudu_command_async(
     oid: OID,
     sql_stmt: &dyn SQLStmt,
@@ -342,6 +357,26 @@ pub async fn mudu_command_async(
         .execute(sql_text.as_str(), &[])
         .await
         .map_err(|e| m_error!(EC::DBInternalError, "postgres command error", e))
+}
+
+pub async fn mudu_batch_async(
+    oid: OID,
+    sql_stmt: &dyn SQLStmt,
+    params: &dyn SQLParams,
+) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    let session = with_async_session(oid).await?;
+    session
+        .client
+        .batch_execute(&sql_stmt.to_sql_string())
+        .await
+        .map_err(|e| m_error!(EC::DBInternalError, "execute postgres batch error", e))?;
+    Ok(0)
 }
 
 fn ensure_session_exists(session_id: OID) -> RS<()> {

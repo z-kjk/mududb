@@ -1,7 +1,7 @@
 use crate::host::{
-    async_invoke_host_batch, async_invoke_host_close, async_invoke_host_command, async_invoke_host_open,
-    async_invoke_host_query, async_invoke_host_session_get, async_invoke_host_session_put,
-    async_invoke_host_session_range,
+    async_invoke_host_batch, async_invoke_host_close, async_invoke_host_command,
+    async_invoke_host_open, async_invoke_host_query, async_invoke_host_session_get,
+    async_invoke_host_session_put, async_invoke_host_session_range,
 };
 use crate::inner_component_async::mududb::async_api::system;
 use mudu::common::id::OID;
@@ -40,7 +40,10 @@ pub async fn inner_command(oid: OID, sql: &dyn SQLStmt, params: &dyn SQLParams) 
 
 #[allow(unused)]
 pub async fn inner_batch(oid: OID, sql: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
-    async_invoke_host_batch(oid, sql, params, async |param| Ok(system::batch(param).await)).await
+    async_invoke_host_batch(oid, sql, params, async |param| {
+        Ok(system::batch(param).await)
+    })
+    .await
 }
 
 #[allow(unused)]

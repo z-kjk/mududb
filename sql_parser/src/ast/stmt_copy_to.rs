@@ -33,3 +33,21 @@ impl StmtCopyTo {
 impl ASTNode for StmtCopyTo {}
 
 impl StmtCopyTo {}
+
+#[cfg(test)]
+mod tests {
+    use super::StmtCopyTo;
+
+    #[test]
+    fn copy_to_accessors_return_constructor_values() {
+        let stmt = StmtCopyTo::new(
+            "'users.csv'".to_string(),
+            "users".to_string(),
+            vec!["id".to_string(), "name".to_string()],
+        );
+
+        assert_eq!(stmt.copy_to_file_path(), "'users.csv'");
+        assert_eq!(stmt.copy_from_table_name(), "users");
+        assert_eq!(stmt.table_columns(), &vec!["id".to_string(), "name".to_string()]);
+    }
+}

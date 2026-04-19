@@ -18,14 +18,18 @@ pub mod stmt_delete;
 pub mod column_def;
 
 mod expr_arithmetic;
+#[cfg(test)]
+mod parser_test;
 pub mod stmt_copy_from;
 pub mod stmt_copy_to;
+pub mod stmt_create_partition_placement;
+pub mod stmt_create_partition_rule;
 pub mod stmt_drop;
 pub mod stmt_drop_table;
 pub mod stmt_insert;
 pub mod stmt_list;
 pub mod stmt_select;
+pub mod stmt_table_partition;
 pub mod stmt_type;
 pub mod stmt_update;
-mod test_parser;
 pub mod type_declare;

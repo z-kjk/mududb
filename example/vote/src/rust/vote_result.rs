@@ -553,4 +553,42 @@ pub mod object {
             OPTIONS
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::VoteResult;
+        use mudu_contract::database::entity::Entity;
+        use mudu_type::datum::{Datum, DatumDyn};
+
+        #[test]
+        fn vote_result_roundtrip_and_field_updates() {
+            let result = VoteResult::new(
+                Some("v1".to_string()),
+                Some("topic".to_string()),
+                Some(1),
+                Some(9),
+                Some("[]".to_string()),
+            );
+
+            let from_value =
+                VoteResult::from_value(&result.to_value(VoteResult::dat_type()).unwrap()).unwrap();
+            assert_eq!(from_value.get_total_votes(), &Some(9));
+            assert_eq!(from_value.get_options().as_deref(), Some("[]"));
+
+            let from_binary =
+                VoteResult::from_binary(result.to_binary(VoteResult::dat_type()).unwrap().as_ref())
+                    .unwrap();
+            assert_eq!(from_binary.get_vote_ended(), &Some(1));
+
+            let mut updated = VoteResult::new_empty();
+            updated
+                .set_field_value("topic", mudu_type::dat_value::DatValue::from_string("t2".to_string()))
+                .unwrap();
+            updated
+                .set_field_value("total_votes", mudu_type::dat_value::DatValue::from_i32(12))
+                .unwrap();
+            assert_eq!(updated.get_topic().as_deref(), Some("t2"));
+            assert_eq!(updated.get_total_votes(), &Some(12));
+        }
+    }
 }

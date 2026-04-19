@@ -9,6 +9,8 @@ impl UniDatTypeId {
         let ty_id = match self {
             Self::I32 => DatTypeID::I32,
             Self::I64 => DatTypeID::I64,
+            Self::OID => DatTypeID::U128,
+            Self::I128 => DatTypeID::I128,
             Self::F32 => DatTypeID::F32,
             Self::F64 => DatTypeID::F64,
             Self::String => DatTypeID::String,
@@ -25,6 +27,8 @@ impl UniDatTypeId {
         let uni_ty = match ty {
             DatTypeID::I32 => Self::I32,
             DatTypeID::I64 => Self::I64,
+            DatTypeID::U128 => Self::OID,
+            DatTypeID::I128 => Self::I128,
             DatTypeID::F32 => Self::F32,
             DatTypeID::F64 => Self::F64,
             DatTypeID::String => Self::String,

@@ -161,14 +161,14 @@ impl ProgressReporter {
         let handle = thread::Builder::new()
             .name(format!("ycsb-progress-{}", phase.as_str()))
             .spawn(move || {
-                let start = Instant::now();
+                let start = mudu_sys::time::instant_now();
                 let mut last_completed = 0;
                 let mut last_report = start;
                 loop {
-                    thread::sleep(PROGRESS_REPORT_INTERVAL);
+                    mudu_sys::task::sleep_blocking(PROGRESS_REPORT_INTERVAL);
                     let started = thread_tracker.started.load(Ordering::Relaxed).min(total);
                     let completed = thread_tracker.completed.load(Ordering::Relaxed).min(total);
-                    let now = Instant::now();
+                    let now = mudu_sys::time::instant_now();
                     let delta = completed.saturating_sub(last_completed);
                     let delta_secs = now.duration_since(last_report).as_secs_f64().max(0.000_001);
                     let total_secs = now.duration_since(start).as_secs_f64().max(0.000_001);
@@ -319,7 +319,7 @@ fn run_sync_mode(args: Args) -> RS<()> {
     let value_template = Arc::new(build_value(args.field_length));
     let routing = Arc::new(load_partition_routing_sync(partition_count)?);
 
-    let load_start = Instant::now();
+    let load_start = mudu_sys::time::instant_now();
     run_workers_sync(
         &args,
         connection_count,
@@ -329,7 +329,7 @@ fn run_sync_mode(args: Args) -> RS<()> {
     )?;
     let load_elapsed = load_start.elapsed();
 
-    let run_start = Instant::now();
+    let run_start = mudu_sys::time::instant_now();
     let counters = run_workers_sync(
         &args,
         connection_count,
@@ -356,7 +356,7 @@ async fn run_async(args: Args) -> RS<()> {
     let value_template = Arc::new(build_value(args.field_length));
     let routing = Arc::new(load_partition_routing_async(partition_count).await?);
 
-    let load_start = Instant::now();
+    let load_start = mudu_sys::time::instant_now();
     run_workers_async(
         &args,
         connection_count,
@@ -367,7 +367,7 @@ async fn run_async(args: Args) -> RS<()> {
     .await?;
     let load_elapsed = load_start.elapsed();
 
-    let run_start = Instant::now();
+    let run_start = mudu_sys::time::instant_now();
     let counters = run_workers_async(
         &args,
         connection_count,
@@ -697,9 +697,13 @@ fn load_partition_routing_sync(partition_count: usize) -> RS<PartitionRouting> {
                 e
             )
         })?;
-    let topology = runtime
-        .block_on(fetch_server_topology(&http_addr))
-        .map_err(|e| mudu::m_error!(mudu::error::ec::EC::NetErr, e))?;
+    let topology = match runtime.block_on(fetch_server_topology(&http_addr)) {
+        Ok(topology) => topology,
+        Err(err) if topology_is_unsupported(&err) => {
+            return Ok(default_partition_routing(partition_count));
+        }
+        Err(err) => return Err(mudu::m_error!(mudu::error::ec::EC::NetErr, err)),
+    };
     build_partition_routing(partition_count, topology)
 }
 
@@ -707,10 +711,19 @@ async fn load_partition_routing_async(partition_count: usize) -> RS<PartitionRou
     let Some(http_addr) = mudu_adapter::config::mudud_http_addr() else {
         return Ok(default_partition_routing(partition_count));
     };
-    let topology = fetch_server_topology(&http_addr)
-        .await
-        .map_err(|e| mudu::m_error!(mudu::error::ec::EC::NetErr, e))?;
+    let topology = match fetch_server_topology(&http_addr).await {
+        Ok(topology) => topology,
+        Err(err) if topology_is_unsupported(&err) => {
+            return Ok(default_partition_routing(partition_count));
+        }
+        Err(err) => return Err(mudu::m_error!(mudu::error::ec::EC::NetErr, err)),
+    };
     build_partition_routing(partition_count, topology)
+}
+
+fn topology_is_unsupported(err: &str) -> bool {
+    err.contains("server topology is not supported")
+        || err.contains("\"code\":\"NotImplemented\"")
 }
 
 fn default_partition_routing(partition_count: usize) -> PartitionRouting {
@@ -901,18 +914,21 @@ async fn run_run_phase_async(
         mark_progress_started(progress, 1);
         let op = choose_op(&args.workload, rng);
         let result = if transaction_enabled(args, WorkerPhase::Run) {
-            run_in_transaction_async(xid, execute_run_op_async(
+            run_in_transaction_async(
                 xid,
-                counters,
-                rng,
-                connection_count,
-                partition_id,
-                args,
-                value_template,
-                next_insert,
-                &mut owned_keys,
-                op,
-            ))
+                execute_run_op_async(
+                    xid,
+                    counters,
+                    rng,
+                    connection_count,
+                    partition_id,
+                    args,
+                    value_template,
+                    next_insert,
+                    &mut owned_keys,
+                    op,
+                ),
+            )
             .await
         } else {
             execute_run_op_async(

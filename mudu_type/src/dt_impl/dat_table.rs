@@ -79,6 +79,26 @@ lazy_static! {
             opt_fn_param: Some(dt_impl::fn_string_param::FN_CHAR_FIXED_PARAM),
         },
         DatTypeDef {
+            id: DatTypeID::U128,
+            type_name: "oid".to_string(),
+            fn_base: dt_impl::fn_u128::FN_OID_CONVERT,
+            opt_fn_compare: Some(dt_impl::fn_u128::FN_OID_COMPARE),
+            #[cfg(any(test, feature = "test"))]
+            fn_arbitrary: dt_impl::fn_u128_arb::FN_OID_ARBITRARY,
+            fixed_length: Some(size_of::<u128>() as u32),
+            opt_fn_param: None,
+        },
+        DatTypeDef {
+            id: DatTypeID::I128,
+            type_name: "i128".to_string(),
+            fn_base: dt_impl::fn_i128::FN_I128_CONVERT,
+            opt_fn_compare: Some(dt_impl::fn_i128::FN_I128_COMPARE),
+            #[cfg(any(test, feature = "test"))]
+            fn_arbitrary: dt_impl::fn_i128_arb::FN_I128_ARBITRARY,
+            fixed_length: Some(size_of::<i128>() as u32),
+            opt_fn_param: None,
+        },
+        DatTypeDef {
             id: DatTypeID::Array,
             type_name: "array".to_string(),
             fn_base: dt_impl::fn_array::FN_ARRAY_CONVERT,

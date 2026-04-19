@@ -73,7 +73,7 @@ impl ResultSetInner {
             .map_err(|e| m_error!(EC::DBInternalError, "query result next", e))?;
         match opt_row {
             Some(row) => {
-                let items = turso_db_row_to_tuple_item(row, self.tuple_desc.fields())?;
+                let items = libsql_db_row_to_tuple_item(row, self.tuple_desc.fields())?;
                 Ok(Some(items))
             }
             None => {
@@ -102,7 +102,7 @@ impl Drop for ResultSetInner {
     }
 }
 
-fn turso_db_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleValue> {
+fn libsql_db_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleValue> {
     let mut vec = vec![];
     if row.column_count() as usize != item_desc.len() {
         return Err(m_error!(EC::FatalError, "column count mismatch"));
@@ -124,6 +124,24 @@ fn turso_db_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleValu
                     m_error!(EC::DBInternalError, "libsql db get item of row error", e)
                 })?;
                 DatValue::from_i64(val)
+            }
+            DatTypeID::U128 => {
+                let val = row.get::<String>(n).map_err(|e| {
+                    m_error!(EC::DBInternalError, "libsql db get item of row error", e)
+                })?;
+                let val = val
+                    .parse::<u128>()
+                    .map_err(|e| m_error!(EC::DBInternalError, "libsql db oid parse error", e))?;
+                DatValue::from_u128(val)
+            }
+            DatTypeID::I128 => {
+                let val = row.get::<String>(n).map_err(|e| {
+                    m_error!(EC::DBInternalError, "libsql db get item of row error", e)
+                })?;
+                let val = val
+                    .parse::<i128>()
+                    .map_err(|e| m_error!(EC::DBInternalError, "libsql db i128 parse error", e))?;
+                DatValue::from_i128(val)
             }
             DatTypeID::F32 => {
                 let val = row.get::<f64>(n).map_err(|e| {

@@ -4,12 +4,11 @@ use crate::tuple::tuple_binary::TupleSlice;
 use mudu::common::buf::Buf;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
-use mudu::error::err::MError;
 use mudu::m_error;
 
 pub fn write_slot_to_buf(value_offset: usize, value_size: usize, buf: &mut [u8]) -> RS<()> {
     let slot = Slot::new(value_offset as u32, value_size as u32);
-    if Slot::size_of() < buf.len() {
+    if Slot::size_of() > buf.len() {
         return Err(m_error!(EC::NotImplemented));
     }
     slot.to_binary(buf);
@@ -41,19 +40,11 @@ pub fn write_value_to_buf(
     value: &Buf,
     buf: &mut [u8],
 ) -> RS<Result<usize, usize>> {
-    let r = {
-        if value.len() > buf.len() {
-            return Err(m_error!(EC::InternalErr, "buffer size error "));
-        }
-        buf[0..value.len()].copy_from_slice(value);
-        Ok::<_, MError>(value.len())
-    };
-
-    let len = match r {
-        Ok(n) => n,
-        Err(e) => return Err(e),
-    };
-    Ok(Ok(len))
+    if value.len() > buf.len() {
+        return Ok(Err(value.len()));
+    }
+    buf[0..value.len()].copy_from_slice(value);
+    Ok(Ok(value.len()))
 }
 
 pub fn write_value_to_tuple(

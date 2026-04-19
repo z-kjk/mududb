@@ -81,8 +81,11 @@ python script/build/install_binaries.py --all-workspace-bins
 Create the configuration file at:
 
 ```bash
+mkdir -p ${HOME}/.mudu
 touch ${HOME}/.mudu/mududb_cfg.toml
 ```
+
+If the file does not exist, `mudud` also creates `${HOME}/.mudu/mududb_cfg.toml` automatically on first start with default values.
 
 ## Use MuduDB
 
@@ -116,12 +119,12 @@ After `mudud` is running, you can verify the built-in key/value access first, th
 Each `mcli` command creates and closes its own temporary session automatically, so you do not need to pass a `session_id`.
 
 ```bash
-mcli put --json '{
+mcli --addr 127.0.0.1:9527 put --json '{
   "key": "user-1",
   "value": "value-1"
 }'
 
-mcli get --json '{
+mcli --addr 127.0.0.1:9527 get --json '{
   "key": "user-1"
 }'
 ```
@@ -150,7 +153,7 @@ target/wasm32-wasip2/release/key-value.mpk
 #### Install the `.mpk` package with mcli
 
 ```bash
-mcli app-install --mpk target/wasm32-wasip2/release/key-value.mpk
+mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
 ```
 
 #### Invoke procedures from the installed `.mpk` package
@@ -158,7 +161,7 @@ mcli app-install --mpk target/wasm32-wasip2/release/key-value.mpk
 Insert a record through the `kv_insert` procedure:
 
 ```bash
-mcli app-invoke --app kv --module key_value --proc kv_insert --json '{
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_insert --json '{
   "user_key": "user-1",
   "value": "value-from-mpk"
 }'
@@ -167,7 +170,7 @@ mcli app-invoke --app kv --module key_value --proc kv_insert --json '{
 Read it back through the `kv_read` procedure:
 
 ```bash
-mcli app-invoke --app kv --module key_value --proc kv_read --json '{
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{
   "user_key": "user-1"
 }'
 ```

@@ -1,5 +1,7 @@
 use crate::ast::stmt_copy_from::StmtCopyFrom;
 use crate::ast::stmt_copy_to::StmtCopyTo;
+use crate::ast::stmt_create_partition_placement::StmtCreatePartitionPlacement;
+use crate::ast::stmt_create_partition_rule::StmtCreatePartitionRule;
 use crate::ast::stmt_create_table::StmtCreateTable;
 use crate::ast::stmt_delete::StmtDelete;
 use crate::ast::stmt_drop_table::StmtDropTable;
@@ -17,7 +19,9 @@ pub enum StmtType {
 pub enum StmtCommand {
     Update(StmtUpdate),
     Delete(StmtDelete),
+    CreatePartitionPlacement(StmtCreatePartitionPlacement),
     Insert(StmtInsert),
+    CreatePartitionRule(StmtCreatePartitionRule),
     CreateTable(StmtCreateTable),
     DropTable(StmtDropTable),
     CopyTo(StmtCopyTo),

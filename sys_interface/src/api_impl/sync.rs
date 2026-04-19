@@ -2,22 +2,19 @@
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu::common::id::OID;
 use mudu::common::result::RS;
+use mudu_binding::system::{command_invoke, query_invoke};
 #[cfg(not(any(
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu_binding::universal::uni_session_open_argv::UniSessionOpenArgv;
@@ -25,10 +22,8 @@ use mudu_binding::universal::uni_session_open_argv::UniSessionOpenArgv;
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu_contract::database::entity::Entity;
@@ -36,21 +31,19 @@ use mudu_contract::database::entity::Entity;
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu_contract::database::entity_set::RecordSet;
+use mudu_contract::database::result_batch::ResultBatch;
+use mudu_contract::database::sql::Context;
 #[cfg(not(any(
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu_contract::database::sql_params::SQLParams;
@@ -58,16 +51,11 @@ use mudu_contract::database::sql_params::SQLParams;
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 use mudu_contract::database::sql_stmt::SQLStmt;
-use mudu_binding::system::{command_invoke, query_invoke};
-use mudu_contract::database::result_batch::ResultBatch;
-use mudu_contract::database::sql::Context;
 
 use crate::host;
 
@@ -81,10 +69,8 @@ pub use super::sync_standalone::*;
 
 #[cfg(all(
     target_arch = "wasm32",
-    any(
-        all(feature = "wasip1", not(feature = "component-model")),
-        all(feature = "component-model", not(feature = "async"))
-    )
+    feature = "component-model",
+    not(feature = "async")
 ))]
 pub use super::sync_wasm::*;
 
@@ -92,10 +78,8 @@ pub use super::sync_wasm::*;
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_query<R: Entity>(
@@ -110,10 +94,8 @@ pub fn mudu_query<R: Entity>(
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_command(_oid: OID, _sql: &dyn SQLStmt, _params: &dyn SQLParams) -> RS<u64> {
@@ -124,10 +106,8 @@ pub fn mudu_command(_oid: OID, _sql: &dyn SQLStmt, _params: &dyn SQLParams) -> R
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_batch(_oid: OID, _sql: &dyn SQLStmt, _params: &dyn SQLParams) -> RS<u64> {
@@ -138,10 +118,8 @@ pub fn mudu_batch(_oid: OID, _sql: &dyn SQLStmt, _params: &dyn SQLParams) -> RS<
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_open() -> RS<OID> {
@@ -152,10 +130,8 @@ pub fn mudu_open() -> RS<OID> {
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_open_argv(_argv: &UniSessionOpenArgv) -> RS<OID> {
@@ -166,10 +142,8 @@ pub fn mudu_open_argv(_argv: &UniSessionOpenArgv) -> RS<OID> {
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_close(_session_id: OID) -> RS<()> {
@@ -180,10 +154,8 @@ pub fn mudu_close(_session_id: OID) -> RS<()> {
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_get(_session_id: OID, _key: &[u8]) -> RS<Option<Vec<u8>>> {
@@ -194,10 +166,8 @@ pub fn mudu_get(_session_id: OID, _key: &[u8]) -> RS<Option<Vec<u8>>> {
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_put(_session_id: OID, _key: &[u8], _value: &[u8]) -> RS<()> {
@@ -208,10 +178,8 @@ pub fn mudu_put(_session_id: OID, _key: &[u8], _value: &[u8]) -> RS<()> {
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(
         target_arch = "wasm32",
-        any(
-            all(feature = "wasip1", not(feature = "component-model")),
-            all(feature = "component-model", not(feature = "async"))
-        )
+        feature = "component-model",
+        not(feature = "async")
     )
 )))]
 pub fn mudu_range(
@@ -230,12 +198,14 @@ pub fn mudu_query_bytes(query_in: &[u8]) -> RS<Vec<u8>> {
             format!("no such session/context {}", oid)
         )
     })?;
-    let response = context.query_raw(stmt.as_ref(), params.as_ref()).and_then(|result| {
-        let desc = result.1.as_ref().clone();
-        let _ = context.cache_result(result)?;
-        let rows = super::drain_context_rows(&context)?;
-        Ok((ResultBatch::from(oid, rows, true), desc))
-    });
+    let response = context
+        .query_raw(stmt.as_ref(), params.as_ref())
+        .and_then(|result| {
+            let desc = result.1.as_ref().clone();
+            let _ = context.cache_result(result)?;
+            let rows = super::drain_context_rows(&context)?;
+            Ok((ResultBatch::from(oid, rows, true), desc))
+        });
     Ok(query_invoke::serialize_query_result(response))
 }
 
@@ -247,7 +217,8 @@ pub fn mudu_fetch_bytes(cursor: &[u8]) -> RS<Vec<u8>> {
             format!("no such session/context {}", oid)
         )
     })?;
-    let response = super::drain_context_rows(&context).map(|rows| ResultBatch::from(oid, rows, true));
+    let response =
+        super::drain_context_rows(&context).map(|rows| ResultBatch::from(oid, rows, true));
     super::serialize_fetch_result(response)
 }
 

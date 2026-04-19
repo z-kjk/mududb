@@ -88,7 +88,7 @@ fn fn_i64_send(v: &DatValue, _: &DatType) -> Result<DatBinary, TyErr> {
 fn fn_i64_send_to(v: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, TyErr> {
     let i = v.to_i64();
     let len = size_of_val(&i) as u32;
-    if size_of_val(&i) < buf.len() {
+    if buf.len() < size_of_val(&i) {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "insufficient space".to_string(),
@@ -99,7 +99,7 @@ fn fn_i64_send_to(v: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, TyEr
 }
 
 fn fn_i64_recv(buf: &[u8], _: &DatType) -> Result<(DatValue, u32), TyErr> {
-    if size_of::<i64>() < buf.len() {
+    if buf.len() < size_of::<i64>() {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "insufficient space".to_string(),

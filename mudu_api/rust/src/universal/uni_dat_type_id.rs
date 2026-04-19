@@ -28,19 +28,23 @@ pub enum UniDatTypeId {
 
     I64 = 8,
 
-    F32 = 9,
+    OID = 9,
 
-    F64 = 10,
+    I128 = 10,
 
-    Char = 11,
+    F32 = 11,
 
-    String = 12,
+    F64 = 12,
 
-    Array = 13,
+    Char = 13,
 
-    Record = 14,
+    String = 14,
 
-    Binary = 15,
+    Array = 15,
+
+    Record = 16,
+
+    Binary = 17,
 }
 
 impl Default for UniDatTypeId {

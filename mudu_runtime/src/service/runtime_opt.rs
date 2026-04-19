@@ -1,3 +1,4 @@
+use crate::backend::mududb_cfg::ServerMode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Default)]
@@ -8,60 +9,26 @@ pub enum ComponentTarget {
     P3,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeTarget {
-    #[default]
-    P1,
-    Component(ComponentTarget),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeOpt {
-    pub target: RuntimeTarget,
+    #[serde(default)]
+    pub component_target: ComponentTarget,
     pub enable_async: bool,
+    pub sever_mode: ServerMode,
 }
 
 impl RuntimeOpt {
-    pub fn from_legacy_enable_p2(enable_p2: bool, enable_async: bool) -> Self {
-        let target = if enable_p2 {
-            RuntimeTarget::Component(ComponentTarget::P2)
-        } else {
-            RuntimeTarget::P1
-        };
-        Self {
-            target,
-            enable_async,
-        }
-    }
-
-    pub fn uses_component_model(&self) -> bool {
-        self.target.uses_component_model()
-    }
-
-    pub fn component_target(&self) -> Option<ComponentTarget> {
-        self.target.component_target()
-    }
-}
-
-impl RuntimeTarget {
-    pub fn uses_component_model(self) -> bool {
-        matches!(self, Self::Component(_))
-    }
-
-    pub fn component_target(self) -> Option<ComponentTarget> {
-        match self {
-            Self::P1 => None,
-            Self::Component(target) => Some(target),
-        }
+    pub fn component_target(&self) -> ComponentTarget {
+        self.component_target
     }
 }
 
 impl Default for RuntimeOpt {
     fn default() -> Self {
         Self {
-            target: RuntimeTarget::P1,
+            component_target: ComponentTarget::P2,
             enable_async: false,
+            sever_mode: Default::default(),
         }
     }
 }

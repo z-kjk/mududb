@@ -26,17 +26,21 @@ pub enum UniPrimitive {
 
     U64 = 7,
 
-    I64 = 8,
+    U128 = 8,
 
-    F32 = 9,
+    I64 = 9,
 
-    F64 = 10,
+    I128 = 10,
 
-    Char = 11,
+    F32 = 11,
 
-    String = 12,
+    F64 = 12,
 
-    Blob = 13,
+    Char = 13,
+
+    String = 14,
+
+    Blob = 15,
 }
 
 impl Default for UniPrimitive {

@@ -28,7 +28,7 @@ pub fn fn_char_arb_val(u: &mut Unstructured, param: &DatType) -> arbitrary::Resu
 pub fn fn_char_arb_printable(u: &mut Unstructured, param: &DatType) -> arbitrary::Result<String> {
     let length = param_len(param).unwrap();
     let s = _arbitrary_string(u, length as usize)?;
-    Ok(format!("\"{}\"", s))
+    serde_json::to_string(&s).map_err(|_| arbitrary::Error::IncorrectFormat)
 }
 
 pub fn fn_char_arb_dt_param(u: &mut Unstructured) -> arbitrary::Result<DatType> {

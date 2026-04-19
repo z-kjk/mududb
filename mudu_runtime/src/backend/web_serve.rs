@@ -17,15 +17,16 @@ pub async fn async_serve(
     stop: Waiter,
     opt_initialized_notifier: Option<Notifier>,
 ) -> RS<()> {
-    let runtime_target = cfg.runtime_target();
-    let enable_async = cfg.enable_async && runtime_target.uses_component_model();
+    let component_target = cfg.component_target();
+    let enable_async = cfg.enable_async;
     let runtime_opt = RuntimeOpt {
-        target: runtime_target,
+        component_target,
         enable_async,
+        sever_mode: cfg.server_mode,
     };
     let service = create_runtime_service(
         &cfg.mpk_path,
-        &cfg.data_path,
+        &cfg.db_path,
         opt_initialized_notifier,
         runtime_opt,
     )
@@ -34,9 +35,9 @@ pub async fn async_serve(
         error!(
             listen_ip = %cfg.listen_ip,
             http_listen_port = cfg.http_listen_port,
-            data_path = %cfg.data_path,
+            data_path = %cfg.db_path,
             mpk_path = %cfg.mpk_path,
-            runtime_target = ?runtime_target,
+            component_target = ?component_target,
             enable_async = enable_async,
             "initialize legacy runtime before starting management http service failed: {}",
             e
@@ -48,7 +49,7 @@ pub async fn async_serve(
         listen_ip = %cfg.listen_ip,
         http_listen_port = cfg.http_listen_port,
         http_worker_threads = cfg.http_worker_threads,
-        runtime_target = ?runtime_target,
+        component_target = ?component_target,
         enable_async = enable_async,
         capabilities = ?HttpApiCapabilities::LEGACY,
         "legacy management http service listening"

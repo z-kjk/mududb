@@ -19,11 +19,11 @@ pub mod _fuzz {
         for s in vec.iter() {
             let (key_desc, key_mapping) = s.key_tuple_desc().unwrap();
             let (value_desc, value_mapping) = s.value_tuple_desc().unwrap();
-            let key_columns = s.key_columns();
-            let value_columns = s.value_columns();
-            for (_i, (columns, desc, mapping)) in vec![
-                (key_columns, key_desc, key_mapping),
-                (value_columns, value_desc, value_mapping),
+            let key_indices = s.key_indices();
+            let value_indices = s.value_indices();
+            for (_i, (indices, desc, mapping)) in vec![
+                (key_indices, key_desc, key_mapping),
+                (value_indices, value_desc, value_mapping),
             ]
             .into_iter()
             .enumerate()
@@ -31,13 +31,13 @@ pub mod _fuzz {
                 assert_eq!(desc.field_count(), mapping.len());
                 for (i, field_info) in mapping.iter().enumerate() {
                     let fd = desc.get_field_desc(i);
-                    let sc = &columns[field_info.column_index()];
+                    let sc = s.column_by_index(indices[field_info.column_index()]);
                     if _i == 0 {
                         assert!(sc.is_primary())
                     } else if _i == 1 {
                         assert!(!sc.is_primary())
                     }
-                    assert_eq!(sc.get_index(), field_info.column_index() as u32);
+                    assert_eq!(sc.get_index(), field_info.column_index());
                     assert_eq!(sc.is_fixed_length(), fd.is_fixed_len());
                     assert_eq!(sc.type_id(), fd.data_type());
                     assert_eq!(sc.get_name(), field_info.name());

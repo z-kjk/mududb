@@ -7,12 +7,13 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use paste::paste;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::hint;
 
 /// A memory-efficient representation of data that can hold various primitive types
 /// or complex types (arrays, records) in a unified enum container.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DatValue {
     inner: ValueKind,
 }
@@ -28,12 +29,15 @@ impl AsRef<DatValue> for DatValue {
 }
 
 /// Internal memory representation supporting various data types
-/// Uses Box for heap allocation of complex types to avoid large enum variants
+/// Uses Box for time_series allocation of complex types to avoid large enum variants
+#[derive(Clone, Debug, Serialize, Deserialize)]
 enum ValueKind {
     F32(f32),
     F64(f64),
     I32(i32),
     I64(i64),
+    I128(i128),
+    U128(u128),
     String(String),
     Record(Vec<DatValue>),
     Array(Vec<DatValue>),
@@ -62,31 +66,6 @@ macro_rules! impl_dat_value_methods {
                     $(
                         ValueKind::$variant_upper(_) => {
                             DatTypeID::$variant_upper
-                        }
-                    )+
-                }
-            }
-        }
-        // Automatically generates debug arms for all enum variant
-        impl std::fmt::Debug for ValueKind {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    $(
-                        ValueKind::$variant_upper(value) => {
-                            write!(f, "{}({:?})", stringify!($variant_upper), value)
-                        }
-                    )+
-                }
-            }
-        }
-
-        // Automatically generates clone arms for all enum variant
-        impl Clone for ValueKind {
-            fn clone(&self) -> Self {
-                match self {
-                    $(
-                        ValueKind::$variant_upper(value) => {
-                            Self::$variant_upper(value.clone())
                         }
                     )+
                 }
@@ -186,6 +165,14 @@ impl DatValue {
     pub fn to_i64(&self) -> i64 {
         self.expect_i64().clone()
     }
+
+    pub fn to_i128(&self) -> i128 {
+        self.expect_i128().clone()
+    }
+
+    pub fn to_oid(&self) -> u128 {
+        self.expect_u128().clone()
+    }
 }
 
 /// Safe wrapper for unsafe pointer casting between types
@@ -210,6 +197,8 @@ unsafe impl Sync for ValueKind {}
 impl_dat_value_methods! {
     (i32, I32, i32),
     (i64, I64, i64),
+    (i128, I128, i128),
+    (u128, U128, u128),
     (f32, F32, f32),
     (f64, F64, f64),
     (String, String, string),
@@ -245,6 +234,7 @@ impl DatumDyn for DatValue {
 #[cfg(test)]
 mod tests {
     use crate::dat_value::DatValue;
+    use serde_json::json;
 
     #[test]
     fn test() {
@@ -259,5 +249,34 @@ mod tests {
         assert_eq!(mem.as_i32(), Some(&i));
         assert_eq!(mem.expect_i32(), &i);
         assert!(mem.as_string().is_none());
+    }
+
+    #[test]
+    fn serde_roundtrip_json() {
+        let value = DatValue::from_record(vec![
+            DatValue::from_i32(7),
+            DatValue::from_string("hello".to_string()),
+            DatValue::from_array(vec![DatValue::from_i64(9), DatValue::from_binary(vec![1, 2, 3])]),
+        ]);
+
+        let json_value = serde_json::to_value(&value).unwrap();
+        assert_eq!(
+            json_value,
+            json!({
+                "inner": {
+                    "Record": [
+                        {"inner": {"I32": 7}},
+                        {"inner": {"String": "hello"}},
+                        {"inner": {"Array": [
+                            {"inner": {"I64": 9}},
+                            {"inner": {"Binary": [1, 2, 3]}}
+                        ]}}
+                    ]
+                }
+            })
+        );
+
+        let from_json: DatValue = serde_json::from_value(json_value).unwrap();
+        assert_eq!(from_json.expect_record().len(), 3);
     }
 }

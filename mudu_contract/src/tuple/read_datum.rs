@@ -74,7 +74,7 @@ pub fn read_var_len_value(offset: usize, tuple: &TupleSlice) -> RS<&[u8]> {
         Err(m_error!(EC::IndexOutOfRange))
     } else {
         let slot = Slot::from_binary(&tuple[_offset.._offset + Slot::size_of()]);
-        if tuple.len() <= slot.offset() + slot.length() {
+        if tuple.len() < slot.offset() + slot.length() {
             return Err(m_error!(EC::IndexOutOfRange));
         }
         Ok(&tuple[slot.offset()..slot.offset() + slot.length()])

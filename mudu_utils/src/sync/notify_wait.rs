@@ -103,3 +103,23 @@ impl<T: Send + Sync + Clone + 'static> _LockNotify<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::create_notify_wait;
+
+    #[tokio::test]
+    async fn notify_wait_delivers_value_once() {
+        let (notify, wait) = create_notify_wait::<u32>();
+        assert!(notify.notify(7).unwrap());
+        assert_eq!(wait.wait().await.unwrap(), Some(7));
+        assert_eq!(wait.wait().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn notify_returns_false_after_receiver_is_dropped() {
+        let (notify, wait) = create_notify_wait::<u32>();
+        drop(wait);
+        assert!(!notify.notify(9).unwrap());
+    }
+}

@@ -33,7 +33,7 @@ pub fn fn_f32_in_json(v: &JsonValue, _: &DatType) -> Result<DatValue, TyErr> {
         }
     };
     match opt_f64 {
-        Some(num) => Ok(DatValue::from_f64(num)),
+        Some(num) => Ok(DatValue::from_f32(num as f32)),
         None => Err(TyErr::new(
             TyEC::TypeConvertFailed,
             format!("cannot convert json {} to f32", v.to_string()),
@@ -84,7 +84,7 @@ pub fn fn_f32_send(v: &DatValue, _: &DatType) -> Result<DatBinary, TyErr> {
 pub fn fn_f32_send_to(v: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, TyErr> {
     let i = v.to_f32();
     let len = size_of_val(&i) as u32;
-    if size_of_val(&i) < buf.len() {
+    if buf.len() < size_of_val(&i) {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "insufficient space".to_string(),
@@ -95,7 +95,7 @@ pub fn fn_f32_send_to(v: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, 
 }
 
 pub fn fn_f32_recv(buf: &[u8], _: &DatType) -> Result<(DatValue, u32), TyErr> {
-    if size_of::<f32>() < buf.len() {
+    if buf.len() < size_of::<f32>() {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "insufficient space".to_string(),

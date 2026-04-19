@@ -6,7 +6,7 @@ mod _test {
     use mudu_utils::log::log_setup;
     use mudu_utils::task::spawn_local_task;
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tokio::runtime::Builder;
     use tokio::task::LocalSet;
     use tracing::info;
@@ -17,7 +17,6 @@ mod _test {
         let canceller = NotifyWait::new();
         let x_snap_mgr = XSnapMgr::new(canceller.clone(), 100, 10);
         let handler = x_snap_mgr.snap_assign_task();
-        let c = canceller.clone();
         let thread = std::thread::spawn(move || {
             let ls = LocalSet::new();
             ls.spawn_local(async move {
@@ -37,7 +36,7 @@ mod _test {
     fn run_request(request: SnapshotRequester, num_x: usize, num_task: usize, num_threads: usize) {
         let mut threads = vec![];
         let duration = Arc::new(Mutex::new(Duration::new(0, 0)));
-        for i in 0..num_threads {
+        for _i in 0..num_threads {
             let r = request.clone();
             let d = duration.clone();
             let thd = std::thread::spawn(move || {
@@ -115,7 +114,7 @@ mod _test {
         let mut xids = vec![];
         let mut duration = Duration::new(0, 0);
         for _i in 0..n {
-            let start = Instant::now();
+            let start = mudu_sys::time::instant_now();
             let snapshot = requester.start_tx().await;
             duration += start.elapsed();
             xids.push(snapshot.unwrap().xid());

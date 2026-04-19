@@ -10,7 +10,8 @@ impl MetaMgrFactory {
     pub fn create(path: String) -> RS<Arc<dyn MetaMgr>> {
         let mut path = PathBuf::from(path);
         path.push("meta");
-        let meta_mgr = MetaMgrImpl::new(path)?;
-        Ok(Arc::new(meta_mgr))
+        let meta_mgr = Arc::new(MetaMgrImpl::new(path)?);
+        meta_mgr.register_global();
+        Ok(meta_mgr)
     }
 }

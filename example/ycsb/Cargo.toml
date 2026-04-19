@@ -23,6 +23,7 @@ benchmark-runner = [
 
 [dependencies]
 mudu = { workspace = true }
+mudu_sys = { workspace = true }
 mudu_type = { workspace = true }
 mudu_contract = { workspace = true }
 mudu_binding = { workspace = true }
@@ -34,6 +35,11 @@ wit-bindgen = { workspace = true }
 clap = { workspace = true, optional = true, features = ["derive"] }
 tokio = { workspace = true, optional = true }
 async-backtrace = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+mudu_adapter = { workspace = true }
+sys_interface = { workspace = true, features = ["async", "standalone-adapter"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[bin]]
 name = "ycsb-benchmark"

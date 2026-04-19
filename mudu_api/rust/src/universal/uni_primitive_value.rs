@@ -17,7 +17,11 @@ pub enum UniPrimitiveValue {
 
     U64(u64),
 
+    U128(u128),
+
     I64(i64),
+
+    I128(i128),
 
     F32(f32),
 
@@ -179,6 +183,24 @@ impl UniPrimitiveValue {
         }
     }
 
+    pub fn from_u128(inner: u128) -> Self {
+        Self::U128(inner)
+    }
+
+    pub fn as_u128(&self) -> Option<&u128> {
+        match self {
+            Self::U128(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    pub fn expect_u128(&self) -> &u128 {
+        match self {
+            Self::U128(inner) => inner,
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
     pub fn from_i64(inner: i64) -> Self {
         Self::I64(inner)
     }
@@ -193,6 +215,24 @@ impl UniPrimitiveValue {
     pub fn expect_i64(&self) -> &i64 {
         match self {
             Self::I64(inner) => inner,
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
+    pub fn from_i128(inner: i128) -> Self {
+        Self::I128(inner)
+    }
+
+    pub fn as_i128(&self) -> Option<&i128> {
+        match self {
+            Self::I128(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    pub fn expect_i128(&self) -> &i128 {
+        match self {
+            Self::I128(inner) => inner,
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
@@ -318,28 +358,38 @@ impl serde::Serialize for UniPrimitiveValue {
                 serialize_seq.serialize_element(&inner)?;
             }
 
-            UniPrimitiveValue::I64(inner) => {
+            UniPrimitiveValue::U128(inner) => {
                 serialize_seq.serialize_element(&8u32)?;
                 serialize_seq.serialize_element(&inner)?;
             }
 
-            UniPrimitiveValue::F32(inner) => {
+            UniPrimitiveValue::I64(inner) => {
                 serialize_seq.serialize_element(&9u32)?;
                 serialize_seq.serialize_element(&inner)?;
             }
 
-            UniPrimitiveValue::F64(inner) => {
+            UniPrimitiveValue::I128(inner) => {
                 serialize_seq.serialize_element(&10u32)?;
                 serialize_seq.serialize_element(&inner)?;
             }
 
-            UniPrimitiveValue::Char(inner) => {
+            UniPrimitiveValue::F32(inner) => {
                 serialize_seq.serialize_element(&11u32)?;
                 serialize_seq.serialize_element(&inner)?;
             }
 
-            UniPrimitiveValue::String(inner) => {
+            UniPrimitiveValue::F64(inner) => {
                 serialize_seq.serialize_element(&12u32)?;
+                serialize_seq.serialize_element(&inner)?;
+            }
+
+            UniPrimitiveValue::Char(inner) => {
+                serialize_seq.serialize_element(&13u32)?;
+                serialize_seq.serialize_element(&inner)?;
+            }
+
+            UniPrimitiveValue::String(inner) => {
+                serialize_seq.serialize_element(&14u32)?;
                 serialize_seq.serialize_element(&inner)?;
             }
         }
@@ -429,33 +479,47 @@ impl<'de> serde::de::Visitor<'de> for UniPrimitiveValueVisitor {
 
             8 => {
                 let value = seq
+                    .next_element::<u128>()?
+                    .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
+                Ok(Self::Value::U128(value))
+            }
+
+            9 => {
+                let value = seq
                     .next_element::<i64>()?
                     .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
                 Ok(Self::Value::I64(value))
             }
 
-            9 => {
+            10 => {
+                let value = seq
+                    .next_element::<i128>()?
+                    .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
+                Ok(Self::Value::I128(value))
+            }
+
+            11 => {
                 let value = seq
                     .next_element::<f32>()?
                     .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
                 Ok(Self::Value::F32(value))
             }
 
-            10 => {
+            12 => {
                 let value = seq
                     .next_element::<f64>()?
                     .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
                 Ok(Self::Value::F64(value))
             }
 
-            11 => {
+            13 => {
                 let value = seq
                     .next_element::<char>()?
                     .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;
                 Ok(Self::Value::Char(value))
             }
 
-            12 => {
+            14 => {
                 let value = seq
                     .next_element::<String>()?
                     .map_or_else(|| Err(A::Error::invalid_length(1, &self)), Ok)?;

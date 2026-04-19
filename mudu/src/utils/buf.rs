@@ -17,7 +17,7 @@ pub fn read_sized_buf(buf: &[u8]) -> Result<(u32, &[u8]), Option<u32>> {
         return Err(None);
     }
     let n = read_u32(buf);
-    if n as usize + len_bytes < buf.len() {
+    if buf.len() < n as usize + len_bytes {
         return Err(Some(n));
     }
     Ok((

@@ -15,3 +15,16 @@ impl ExprLiteral {
 }
 
 impl ASTNode for ExprLiteral {}
+
+#[cfg(test)]
+mod tests {
+    use super::ExprLiteral;
+    use mudu_type::dat_type_id::DatTypeID;
+    use mudu_type::dat_typed::DatTyped;
+
+    #[test]
+    fn expr_literal_returns_underlying_typed_value() {
+        let literal = ExprLiteral::DatumLiteral(DatTyped::from_i32(11));
+        assert_eq!(literal.dat_type().dat_type().dat_type_id(), DatTypeID::I32);
+    }
+}

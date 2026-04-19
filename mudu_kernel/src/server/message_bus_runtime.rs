@@ -1,0 +1,355 @@
+use async_trait::async_trait;
+use crossbeam_queue::SegQueue;
+use mudu::common::id::OID;
+use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
+use std::collections::VecDeque;
+use std::os::fd::RawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
+
+use crate::io::worker_ring::WorkerLocalRing;
+use crate::server::message_bus_api::{
+     EndpointId, Envelope, MessageBus, MessageBusRef, MessageId, OnRecvCallback,
+    OutgoingMessage, RecvFilter, SubscriptionId,
+};
+use crate::server::server_iouring;
+use crate::server::worker_mailbox::WorkerMailboxMsg;
+use crate::server::worker_registry::WorkerRegistry;
+use crate::server::worker_task::spawn_system_worker_task;
+
+struct RecvWaiter {
+    filter: RecvFilter,
+    sender: oneshot::Sender<Envelope>,
+}
+
+struct RegisteredCallback {
+    id: SubscriptionId,
+    filter: RecvFilter,
+    callback: OnRecvCallback,
+}
+
+#[derive(Default)]
+struct MessageBusState {
+    inbox: VecDeque<Envelope>,
+    recv_waiters: VecDeque<RecvWaiter>,
+    callbacks: Vec<RegisteredCallback>,
+    next_subscription_id: SubscriptionId,
+}
+
+pub(crate) struct WorkerMessageBus {
+    local_worker_id: OID,
+    registry: Arc<WorkerRegistry>,
+    mailbox_fds: Vec<RawFd>,
+    mailboxes: Vec<Arc<SegQueue<WorkerMailboxMsg>>>,
+    worker_local_ring: Arc<WorkerLocalRing>,
+    next_msg_id: AtomicU64,
+    state: Mutex<MessageBusState>,
+}
+
+impl WorkerMessageBus {
+    pub(crate) fn new(
+        local_worker_id: OID,
+        registry: Arc<WorkerRegistry>,
+        mailbox_fds: Vec<RawFd>,
+        mailboxes: Vec<Arc<SegQueue<WorkerMailboxMsg>>>,
+        worker_local_ring: Arc<WorkerLocalRing>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            local_worker_id,
+            registry,
+            mailbox_fds,
+            mailboxes,
+            worker_local_ring,
+            next_msg_id: AtomicU64::new(1),
+            state: Mutex::new(MessageBusState {
+                next_subscription_id: 1,
+                ..MessageBusState::default()
+            }),
+        })
+    }
+
+    pub(crate) fn as_ref(self: &Arc<Self>) -> MessageBusRef {
+        self.clone()
+    }
+
+    pub(crate) fn handle_incoming(&self, envelope: Envelope) -> RS<()> {
+        let maybe_callback = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| m_error!(EC::InternalErr, "message bus state lock poisoned"))?;
+            state.handle_incoming(envelope)
+        };
+        if let Some((callback, envelope)) = maybe_callback {
+            let future = (callback)(envelope);
+            self.worker_local_ring
+                .worker_task_registry()
+                .spawn_system(spawn_system_worker_task(future));
+        }
+        Ok(())
+    }
+
+    fn route_worker_index(&self, endpoint: &EndpointId) -> RS<usize> {
+        match endpoint {
+            EndpointId::Worker(worker_id) => self
+                .registry
+                .worker_index_by_worker_id(*worker_id)
+                .ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("no such worker id {}", worker_id)
+                    )
+                }),
+            EndpointId::External(external_id) => Err(m_error!(
+                EC::NotImplemented,
+                format!("external endpoint {} is not implemented yet", external_id)
+            )),
+            EndpointId::Session(session_id) => Err(m_error!(
+                EC::NotImplemented,
+                format!("session endpoint {} is not implemented yet", session_id)
+            )),
+        }
+    }
+
+    fn dispatch_mailbox_message(&self, target_worker: usize, msg: WorkerMailboxMsg) -> RS<()> {
+        let Some(mailbox) = self.mailboxes.get(target_worker) else {
+            return Err(m_error!(
+                EC::InternalErr,
+                format!("mailbox target worker {} is out of range", target_worker)
+            ));
+        };
+        let Some(&fd) = self.mailbox_fds.get(target_worker) else {
+            return Err(m_error!(
+                EC::InternalErr,
+                format!(
+                    "mailbox eventfd target worker {} is out of range",
+                    target_worker
+                )
+            ));
+        };
+        mailbox.push(msg);
+        server_iouring::notify_mailbox_fd(fd)
+    }
+}
+
+#[async_trait(?Send)]
+impl MessageBus for WorkerMessageBus {
+    fn local_endpoint(&self) -> EndpointId {
+        EndpointId::Worker(self.local_worker_id)
+    }
+
+    async fn send(&self, dst: EndpointId, message: OutgoingMessage) -> RS<MessageId> {
+        let msg_id = self.next_msg_id.fetch_add(1, Ordering::Relaxed);
+        let envelope = Envelope::new(
+            msg_id,
+            message.correlation_id(),
+            self.local_endpoint(),
+            dst.clone(),
+            message.kind(),
+            message.payload_owned(),
+            message.delivery(),
+        );
+        let target_worker = self.route_worker_index(&dst)?;
+        self.dispatch_mailbox_message(target_worker, WorkerMailboxMsg::BusMessage(envelope))?;
+        Ok(msg_id)
+    }
+
+    async fn recv(&self, filter: RecvFilter) -> RS<Envelope> {
+        let receiver = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| m_error!(EC::InternalErr, "message bus state lock poisoned"))?;
+            if let Some(envelope) = state.try_take_message(&filter) {
+                return Ok(envelope);
+            }
+            state.register_waiter(filter)
+        };
+        receiver
+            .await
+            .map_err(|_| m_error!(EC::ThreadErr, "message bus waiter dropped before delivery"))
+    }
+
+    fn on_recv_callback(&self, filter: RecvFilter, callback: OnRecvCallback) -> RS<SubscriptionId> {
+        let (callback_id, maybe_envelope) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| m_error!(EC::InternalErr, "message bus state lock poisoned"))?;
+            state.register_callback(filter, callback.clone())
+        };
+        if let Some(envelope) = maybe_envelope {
+            let future = (callback)(envelope);
+            self.worker_local_ring
+                .worker_task_registry()
+                .spawn_system(spawn_system_worker_task(future));
+        }
+        Ok(callback_id)
+    }
+
+    fn cancel_callback(&self, id: SubscriptionId) -> RS<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| m_error!(EC::InternalErr, "message bus state lock poisoned"))?;
+        Ok(state.cancel_callback(id))
+    }
+}
+
+impl MessageBusState {
+    fn try_take_message(&mut self, filter: &RecvFilter) -> Option<Envelope> {
+        let index = self
+            .inbox
+            .iter()
+            .position(|message| message.matches(filter))?;
+        self.inbox.remove(index)
+    }
+
+    fn register_waiter(&mut self, filter: RecvFilter) -> oneshot::Receiver<Envelope> {
+        let (sender, receiver) = oneshot::channel();
+        self.recv_waiters.push_back(RecvWaiter { filter, sender });
+        receiver
+    }
+
+    fn register_callback(
+        &mut self,
+        filter: RecvFilter,
+        callback: OnRecvCallback,
+    ) -> (SubscriptionId, Option<Envelope>) {
+        let id = self.next_subscription_id;
+        self.next_subscription_id += 1;
+        let maybe_envelope = self.try_take_message(&filter);
+        self.callbacks.push(RegisteredCallback {
+            id,
+            filter,
+            callback,
+        });
+        (id, maybe_envelope)
+    }
+
+    fn cancel_callback(&mut self, id: SubscriptionId) -> bool {
+        let Some(index) = self.callbacks.iter().position(|callback| callback.id == id) else {
+            return false;
+        };
+        self.callbacks.remove(index);
+        true
+    }
+
+    fn handle_incoming(&mut self, envelope: Envelope) -> Option<(OnRecvCallback, Envelope)> {
+        if let Some(index) = self
+            .recv_waiters
+            .iter()
+            .position(|waiter| envelope.matches(&waiter.filter))
+        {
+            if let Some(waiter) = self.recv_waiters.remove(index) {
+                let _ = waiter.sender.send(envelope);
+                return None;
+            }
+        }
+
+        if let Some(index) = self
+            .callbacks
+            .iter()
+            .position(|callback| envelope.matches(&callback.filter))
+        {
+            let callback = self.callbacks[index].callback.clone();
+            return Some((callback, envelope));
+        }
+
+        self.inbox.push_back(envelope);
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::worker_ring::WorkerLocalRing;
+    use crate::server::message_bus_api::{DeliveryMode, MessageKind, SystemMessageKind};
+    use crate::server::worker_registry::WorkerRegistry;
+
+    fn test_registry() -> Arc<WorkerRegistry> {
+        Arc::new(
+            WorkerRegistry::new(vec![
+                crate::server::worker_registry::WorkerIdentity {
+                    worker_index: 0,
+                    worker_id: 11,
+                    partition_ids: vec![101],
+                },
+                crate::server::worker_registry::WorkerIdentity {
+                    worker_index: 1,
+                    worker_id: 12,
+                    partition_ids: vec![102],
+                },
+            ])
+            .unwrap(),
+        )
+    }
+
+    fn test_bus(worker_id: OID) -> Arc<WorkerMessageBus> {
+        WorkerMessageBus::new(
+            worker_id,
+            test_registry(),
+            vec![0, 1],
+            vec![Arc::new(SegQueue::new()), Arc::new(SegQueue::new())],
+            Arc::new(WorkerLocalRing::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn recv_consumes_buffered_message() {
+        let bus = test_bus(11);
+        bus.handle_incoming(Envelope::new(
+            1,
+            None,
+            EndpointId::Worker(12),
+            EndpointId::Worker(11),
+            MessageKind::User(7),
+            b"ping".to_vec(),
+            DeliveryMode::FireAndForget,
+        ))
+        .unwrap();
+
+        let message = bus
+            .recv(RecvFilter {
+                src: Some(EndpointId::Worker(12)),
+                kind: Some(MessageKind::User(7)),
+                ..RecvFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(message.payload(), b"ping");
+    }
+
+    #[tokio::test]
+    async fn recv_waiter_is_fulfilled_by_incoming_message() {
+        let bus = test_bus(11);
+        let mut recv = Box::pin(bus.recv(RecvFilter {
+            src: Some(EndpointId::Worker(12)),
+            correlation_id: Some(9),
+            ..RecvFilter::default()
+        }));
+
+        assert!(matches!(
+            futures::poll!(recv.as_mut()),
+            std::task::Poll::Pending
+        ));
+
+        bus.handle_incoming(Envelope::new(
+            2,
+            Some(9),
+            EndpointId::Worker(12),
+            EndpointId::Worker(11),
+            MessageKind::System(SystemMessageKind::Ack),
+            Vec::new(),
+            DeliveryMode::Response,
+        ))
+        .unwrap();
+
+        let message = recv.await.unwrap();
+        assert_eq!(message.correlation_id(), Some(9));
+    }
+}

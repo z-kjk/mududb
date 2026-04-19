@@ -36,3 +36,47 @@ pub fn read_toml<D: DeserializeOwned, P: AsRef<Path>>(path: P) -> RS<D> {
         .map_err(|e| m_error!(EC::DecodeErr, "decode from toml string error", e))?;
     Ok(ret)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{read_toml, to_toml_str, write_toml};
+    use serde::{Deserialize, Serialize};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct DemoToml {
+        id: u32,
+        name: String,
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mudu_toml_{name}_{suffix}.toml"))
+    }
+
+    #[test]
+    fn toml_string_and_file_roundtrip() {
+        let value = DemoToml {
+            id: 7,
+            name: "alice".to_string(),
+        };
+        let toml = to_toml_str(&value).unwrap();
+        assert!(toml.contains("id = 7"));
+
+        let path = temp_path("roundtrip");
+        write_toml(&value, &path).unwrap();
+        let loaded: DemoToml = read_toml(&path).unwrap();
+        assert_eq!(loaded, value);
+    }
+
+    #[test]
+    fn read_toml_rejects_invalid_input() {
+        let path = temp_path("invalid");
+        std::fs::write(&path, "not = [valid").unwrap();
+        let err = read_toml::<DemoToml, _>(&path).unwrap_err();
+        assert!(err.to_string().contains("DecodeErr"));
+    }
+}

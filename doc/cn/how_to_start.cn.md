@@ -83,8 +83,11 @@ python script/build/install_binaries.py --all-workspace-bins
 在以下位置创建配置文件：
 
 ```bash
+mkdir -p ${HOME}/.mudu
 touch ${HOME}/.mudu/mududb_cfg.toml
 ```
+
+如果该文件不存在，`mudud` 首次启动时也会按默认值自动创建 `${HOME}/.mudu/mududb_cfg.toml`。
 
 ## 使用 MuduDB
 
@@ -118,12 +121,12 @@ mudud
 每条 `mcli` 命令都会自动创建并关闭一个临时 session，因此不需要显式传入 `session_id`。
 
 ```bash
-mcli put --json '{
+mcli --addr 127.0.0.1:9527 put --json '{
   "key": "user-1",
   "value": "value-1"
 }'
 
-mcli get --json '{
+mcli --addr 127.0.0.1:9527 get --json '{
   "key": "user-1"
 }'
 ```
@@ -152,7 +155,7 @@ target/wasm32-wasip2/release/key-value.mpk
 #### 使用 mcli 安装 `.mpk` 包
 
 ```bash
-mcli app-install --mpk target/wasm32-wasip2/release/key-value.mpk
+mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
 ```
 
 #### 使用 mcli 调用已安装 `.mpk` 中的过程
@@ -160,7 +163,7 @@ mcli app-install --mpk target/wasm32-wasip2/release/key-value.mpk
 通过 `kv_insert` 过程写入一条记录：
 
 ```bash
-mcli app-invoke --app kv --module key_value --proc kv_insert --json '{
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_insert --json '{
   "user_key": "user-1",
   "value": "value-from-mpk"
 }'
@@ -169,7 +172,7 @@ mcli app-invoke --app kv --module key_value --proc kv_insert --json '{
 再通过 `kv_read` 过程读取：
 
 ```bash
-mcli app-invoke --app kv --module key_value --proc kv_read --json '{
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{
   "user_key": "user-1"
 }'
 ```

@@ -1,4 +1,4 @@
-use mudu::common::id::OID;
+use mudu::common::id::{AttrIndex, DatumIndex, OID};
 use mudu_type::dt_fn_param::DatType;
 
 #[derive(Clone, Debug, Default)]
@@ -7,21 +7,28 @@ pub struct FieldInfo {
     id: OID,
     type_desc: DatType,
     // index in key or value tuple
-    datum_index: usize,
+    datum_index: DatumIndex,
     // index in original create table column definition list
-    column_index: usize,
-    is_primary: bool,
+    column_index: AttrIndex,
+    primary_index: Option<AttrIndex>,
 }
 
 impl FieldInfo {
-    pub fn new(name: String, id: OID, type_desc: DatType, index: usize, is_primary: bool) -> Self {
+    pub fn new(
+        name: String,
+        id: OID,
+        type_desc: DatType,
+        datum_index: DatumIndex,
+        column_index: AttrIndex,
+        primary_index: Option<AttrIndex>,
+    ) -> Self {
         Self {
             name,
             id,
             type_desc,
-            datum_index: index,
-            column_index: index,
-            is_primary,
+            datum_index,
+            column_index,
+            primary_index,
         }
     }
 
@@ -33,19 +40,23 @@ impl FieldInfo {
         self.id
     }
 
-    pub fn column_index(&self) -> usize {
+    pub fn column_index(&self) -> AttrIndex {
         self.column_index
     }
 
     pub fn is_primary(&self) -> bool {
-        self.is_primary
+        self.primary_index.is_some()
     }
 
-    pub fn datum_index(&self) -> usize {
+    pub fn primary_index(&self) -> Option<AttrIndex> {
+        self.primary_index
+    }
+
+    pub fn datum_index(&self) -> DatumIndex {
         self.datum_index
     }
 
-    pub fn set_datum_index(&mut self, index: usize) {
+    pub fn set_datum_index(&mut self, index: DatumIndex) {
         self.datum_index = index;
     }
 

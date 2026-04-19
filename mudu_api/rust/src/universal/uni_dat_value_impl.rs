@@ -32,7 +32,9 @@ impl UniDatValue {
                     UniPrimitiveValue::U64(_) => {
                         unimplemented!()
                     }
+                    UniPrimitiveValue::U128(v) => DatValue::from_u128(v),
                     UniPrimitiveValue::I64(v) => DatValue::from_i64(v),
+                    UniPrimitiveValue::I128(v) => DatValue::from_i128(v),
                     UniPrimitiveValue::F32(v) => DatValue::from_f32(v),
                     UniPrimitiveValue::F64(v) => DatValue::from_f64(v),
                     UniPrimitiveValue::Char(_) => {
@@ -72,6 +74,12 @@ impl UniDatValue {
             DatTypeID::I64 => {
                 UniDatValue::from_primitive(UniPrimitiveValue::I64(dat_value.expect_i64().clone()))
             }
+            DatTypeID::I128 => UniDatValue::from_primitive(UniPrimitiveValue::I128(
+                dat_value.expect_i128().clone(),
+            )),
+            DatTypeID::U128 => UniDatValue::from_primitive(UniPrimitiveValue::U128(
+                dat_value.expect_u128().clone(),
+            )),
             DatTypeID::F32 => {
                 UniDatValue::from_primitive(UniPrimitiveValue::F32(dat_value.expect_f32().clone()))
             }

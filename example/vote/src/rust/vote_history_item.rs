@@ -553,4 +553,44 @@ pub mod object {
             VOTE_ENDED
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::VoteHistoryItem;
+        use mudu_contract::database::entity::Entity;
+        use mudu_type::datum::{Datum, DatumDyn};
+
+        #[test]
+        fn vote_history_item_roundtrip_and_field_updates() {
+            let item = VoteHistoryItem::new(
+                Some("v1".to_string()),
+                Some("topic".to_string()),
+                Some(11),
+                Some(0),
+                Some(1),
+            );
+
+            let from_value =
+                VoteHistoryItem::from_value(&item.to_value(VoteHistoryItem::dat_type()).unwrap())
+                    .unwrap();
+            assert_eq!(from_value.get_topic().as_deref(), Some("topic"));
+            assert_eq!(from_value.get_vote_ended(), &Some(1));
+
+            let from_binary = VoteHistoryItem::from_binary(
+                item.to_binary(VoteHistoryItem::dat_type()).unwrap().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(from_binary.get_action_time(), &Some(11));
+
+            let mut updated = VoteHistoryItem::new_empty();
+            updated
+                .set_field_value("topic", mudu_type::dat_value::DatValue::from_string("t2".to_string()))
+                .unwrap();
+            updated
+                .set_field_value("vote_ended", mudu_type::dat_value::DatValue::from_i32(0))
+                .unwrap();
+            assert_eq!(updated.get_topic().as_deref(), Some("t2"));
+            assert_eq!(updated.get_vote_ended(), &Some(0));
+        }
+    }
 }

@@ -9,6 +9,8 @@ enum uni-dat-type-id {
     i32,
     %u64,
     i64,
+    oid,
+    i128,
     %f32,
     %f64,
     %char,

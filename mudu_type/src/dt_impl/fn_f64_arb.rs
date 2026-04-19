@@ -4,12 +4,17 @@ use crate::dat_value::DatValue;
 use crate::dt_fn_arbitrary::FnArbitrary;
 use arbitrary::{Arbitrary, Unstructured};
 
+fn arb_finite_f64(u: &mut Unstructured) -> arbitrary::Result<f64> {
+    let value = f64::arbitrary(u)?;
+    Ok(if value.is_finite() { value } else { 0.0 })
+}
+
 pub fn fn_f64_arb_val(u: &mut Unstructured, _: &DatType) -> arbitrary::Result<DatValue> {
-    Ok(DatValue::from_f64(f64::arbitrary(u)?))
+    Ok(DatValue::from_f64(arb_finite_f64(u)?))
 }
 
 pub fn fn_f64_arb_printable(u: &mut Unstructured, _: &DatType) -> arbitrary::Result<String> {
-    Ok(f64::arbitrary(u)?.to_string())
+    Ok(arb_finite_f64(u)?.to_string())
 }
 
 pub fn fn_f64_arb_dt_param(_u: &mut Unstructured) -> arbitrary::Result<DatType> {

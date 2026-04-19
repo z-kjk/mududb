@@ -1,15 +1,15 @@
+#![allow(dead_code)]
+
 pub mod lsn;
-pub mod mem_store;
 pub mod x_lock_mgr;
-pub mod x_log;
 
 pub mod meta_mgr;
+pub mod partition_rule;
+pub mod partition_rule_binding;
 
 pub mod cmd_exec;
 pub mod data_row;
 mod field_info;
-pub mod pst_op;
-pub mod pst_op_list;
 pub mod query_exec;
 pub mod schema_column;
 pub mod schema_table;
@@ -22,11 +22,5 @@ pub mod timestamp;
 pub mod version_delta;
 pub mod version_tuple;
 pub mod waiter;
-pub mod xl_batch;
-pub mod xl_chunk;
-mod xl_d_delete;
-mod xl_d_insert;
+mod worker_snapshot;
 pub mod xl_d_up_tuple;
-mod xl_d_update;
-mod xl_op;
-pub mod xl_rec;

@@ -1,7 +1,7 @@
+use crate::universal::uni_session_open_argv::UniSessionOpenArgv;
 use mudu::common::endian::{read_u128, write_u128};
 use mudu::common::id::OID;
 use mudu::common::result::RS;
-use crate::universal::uni_session_open_argv::UniSessionOpenArgv;
 use std::mem::size_of;
 
 fn write_u32_be(output: &mut Vec<u8>, value: u32) {
@@ -153,6 +153,30 @@ pub fn deserialize_put_result(input: &[u8]) -> RS<()> {
             "invalid put result"
         ))
     }
+}
+
+pub fn serialize_delete_param(key: &[u8]) -> Vec<u8> {
+    serialize_session_get_param(0, key)
+}
+
+pub fn serialize_session_delete_param(session_id: OID, key: &[u8]) -> Vec<u8> {
+    serialize_session_get_param(session_id, key)
+}
+
+pub fn deserialize_delete_param(input: &[u8]) -> RS<Vec<u8>> {
+    deserialize_get_param(input)
+}
+
+pub fn deserialize_session_delete_param(input: &[u8]) -> RS<(OID, Vec<u8>)> {
+    deserialize_session_get_param(input)
+}
+
+pub fn serialize_delete_result() -> Vec<u8> {
+    serialize_put_result()
+}
+
+pub fn deserialize_delete_result(input: &[u8]) -> RS<()> {
+    deserialize_put_result(input)
 }
 
 pub fn serialize_range_param(start_key: &[u8], end_key: &[u8]) -> Vec<u8> {

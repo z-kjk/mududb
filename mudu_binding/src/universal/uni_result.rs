@@ -87,7 +87,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(UniResultVisitor::default())
+        deserializer.deserialize_map(UniResultVisitor::default())
     }
 }
 

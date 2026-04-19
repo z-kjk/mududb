@@ -40,7 +40,7 @@ impl DDLParser {
                 let column_def = FieldDef::new(
                     d.column_name().clone(),
                     d.data_type().clone(),
-                    d.is_primary_key(),
+                    d.primary_key_index().is_some(),
                 );
                 column_def
             })

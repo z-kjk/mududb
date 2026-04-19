@@ -159,10 +159,9 @@ pub fn mudu_command(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) ->
 pub fn mudu_batch(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
     match config::driver() {
         Driver::Sqlite => sqlite::mudu_batch(oid, sql_stmt, params),
-        Driver::Postgres | Driver::MySql | Driver::Mudud => Err(mudu::m_error!(
-            mudu::error::ec::EC::NotImplemented,
-            "batch syscall is only implemented for sqlite standalone adapter"
-        )),
+        Driver::Postgres => postgres::mudu_batch(oid, sql_stmt, params),
+        Driver::MySql => mysql::mudu_batch(oid, sql_stmt, params),
+        Driver::Mudud => mududb::mudu_batch(oid, sql_stmt, params),
     }
 }
 
@@ -180,17 +179,12 @@ pub async fn mudu_command_async(
     }
 }
 
-pub async fn mudu_batch_async(
-    oid: OID,
-    sql_stmt: &dyn SQLStmt,
-    params: &dyn SQLParams,
-) -> RS<u64> {
+pub async fn mudu_batch_async(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
     match config::driver() {
         Driver::Sqlite => sqlite::mudu_batch_async(oid, sql_stmt, params).await,
-        Driver::Postgres | Driver::MySql | Driver::Mudud => Err(mudu::m_error!(
-            mudu::error::ec::EC::NotImplemented,
-            "batch syscall is only implemented for sqlite standalone adapter"
-        )),
+        Driver::Postgres => postgres::mudu_batch_async(oid, sql_stmt, params).await,
+        Driver::MySql => mysql::mudu_batch_async(oid, sql_stmt, params).await,
+        Driver::Mudud => mududb::mudu_batch_async(oid, sql_stmt, params).await,
     }
 }
 

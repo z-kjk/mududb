@@ -47,9 +47,9 @@ Supported forms:
 - `postgres://user:pass@127.0.0.1:5432/app_db`
 - `postgresql://user:pass@127.0.0.1:5432/app_db`
 - `mysql://user:pass@127.0.0.1:3306/app_db`
-- `mudud://127.0.0.1:9000/app_name`
-- `mudud://127.0.0.1:9000/app_name?http_addr=127.0.0.1:8300`
-- `mudud://127.0.0.1:9000/app_name?http_addr=127.0.0.1:8300&async_session_loop=true`
+- `mudud://127.0.0.1:9527/app_name`
+- `mudud://127.0.0.1:9527/app_name?http_addr=127.0.0.1:8300`
+- `mudud://127.0.0.1:9527/app_name?http_addr=127.0.0.1:8300&async_session_loop=true`
 
 If `MUDU_CONNECTION` is not set, the default is:
 
@@ -126,7 +126,7 @@ Notes:
 Example:
 
 ```bash
-export MUDU_CONNECTION="mudud://127.0.0.1:9000/app1?http_addr=127.0.0.1:8300"
+export MUDU_CONNECTION="mudud://127.0.0.1:9527/app1?http_addr=127.0.0.1:8300"
 cargo run
 ```
 

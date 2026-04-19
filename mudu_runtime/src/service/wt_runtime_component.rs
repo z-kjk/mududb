@@ -40,12 +40,7 @@ impl WTRuntimeComponent {
     }
 
     pub fn instantiate(&mut self) -> RS<()> {
-        let component_target = self.runtime_opt.component_target().ok_or_else(|| {
-            m_error!(
-                EC::InternalErr,
-                "component runtime requested without a component target"
-            )
-        })?;
+        let component_target = self.runtime_opt.component_target();
         wasi_context_component::async_host::mududb::async_api::system::add_to_linker::<_, HasSelf<_>>(
             &mut self.linker,
             |c| c,
@@ -90,7 +85,7 @@ fn instantiate_component(
                 return Err(m_error!(
                     EC::MuduError,
                     format!(
-                        "package module {} is a WebAssembly module, but runtime target is component; disable enable_p2 or rebuild the package for wasm32-wasip2",
+                        "package module {} is a WebAssembly module, but runtime target is component; rebuild the package for wasm32-wasip2",
                         name
                     ),
                     component_err

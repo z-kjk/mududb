@@ -20,3 +20,18 @@ impl LenPayload {
         Endian::write_u32(s, len);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::LenPayload;
+
+    #[test]
+    fn len_payload_reads_and_writes_header() {
+        let mut buf = vec![0_u8; 7];
+        LenPayload::set_len(&mut buf, 3);
+        buf[4..].copy_from_slice(b"xyz");
+
+        assert_eq!(LenPayload::len(&buf), 3);
+        assert_eq!(LenPayload::payload(&buf), b"xyz");
+    }
+}

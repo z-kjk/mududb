@@ -4,6 +4,7 @@
 )))]
 use mudu::common::id::OID;
 use mudu::common::result::RS;
+use mudu_binding::system::{command_invoke, query_invoke};
 #[cfg(not(any(
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(target_arch = "wasm32", feature = "component-model", feature = "async")
@@ -19,6 +20,8 @@ use mudu_contract::database::entity::Entity;
     all(target_arch = "wasm32", feature = "component-model", feature = "async")
 )))]
 use mudu_contract::database::entity_set::RecordSet;
+use mudu_contract::database::result_batch::ResultBatch;
+use mudu_contract::database::sql::Context;
 #[cfg(not(any(
     all(not(target_arch = "wasm32"), feature = "standalone-adapter"),
     all(target_arch = "wasm32", feature = "component-model", feature = "async")
@@ -29,9 +32,6 @@ use mudu_contract::database::sql_params::SQLParams;
     all(target_arch = "wasm32", feature = "component-model", feature = "async")
 )))]
 use mudu_contract::database::sql_stmt::SQLStmt;
-use mudu_binding::system::{command_invoke, query_invoke};
-use mudu_contract::database::result_batch::ResultBatch;
-use mudu_contract::database::sql::Context;
 
 use crate::host;
 
@@ -159,7 +159,8 @@ pub async fn mudu_fetch_bytes(cursor: &[u8]) -> RS<Vec<u8>> {
             format!("no such session/context {}", oid)
         )
     })?;
-    let response = super::drain_context_rows(&context).map(|rows| ResultBatch::from(oid, rows, true));
+    let response =
+        super::drain_context_rows(&context).map(|rows| ResultBatch::from(oid, rows, true));
     super::serialize_fetch_result(response)
 }
 

@@ -49,7 +49,7 @@ impl StmtCopyFrom {
         }
     }
 
-    fn build_copy_to_cmd(p: LoadParam, thd_ctx: &dyn SsnCtx) -> LoadFromFile {
+    fn build_copy_to_cmd(_p: LoadParam, _thd_ctx: &dyn SsnCtx) -> LoadFromFile {
         todo!()
         /*
         LoadFromFile::new(
@@ -75,7 +75,7 @@ impl StmtCopyFrom {
         Ok(Arc::new(cmd))
     }
 
-    async fn build_param(&self, ctx: &dyn SsnCtx) -> RS<()> {
+    async fn build_param(&self, _ctx: &dyn SsnCtx) -> RS<()> {
         todo!()
         /*
         let opt_table = ctx

@@ -36,6 +36,8 @@ pub enum DatTypeID {
     F32 = 2,
     F64 = 3,
     String = 4,
+    U128 = 5,
+    I128 = 6,
 
     // Complex types (start after primitive range)
     Array = PRIMITIVE_ID_MAX + 1,
@@ -176,7 +178,12 @@ impl DatTypeID {
 
     pub fn has_param(&self) -> bool {
         match self {
-            DatTypeID::I32 | DatTypeID::I64 | DatTypeID::F32 | DatTypeID::F64 => false,
+            DatTypeID::I32
+            | DatTypeID::I64
+            | DatTypeID::I128
+            | DatTypeID::F32
+            | DatTypeID::F64
+            | DatTypeID::U128 => false,
             _ => true,
         }
     }

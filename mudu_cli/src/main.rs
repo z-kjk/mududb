@@ -16,11 +16,11 @@ type AppResult<T> = Result<T, String>;
 
 const CLI_EXAMPLES: &str = "\
 Examples:
-  mcli --addr 127.0.0.1:9000 command --json '{\"app_name\":\"demo\",\"sql\":\"select 1\"}'
-  mcli put --json-file put.json
-  cat invoke.json | mcli invoke --json-file -
-  mcli app-install --mpk target/wasm32-wasip2/release/key-value.mpk
-  mcli app-invoke --app kv --module key_value --proc kv_read --json '{\"user_key\":\"user-1\"}'";
+  mcli --addr 127.0.0.1:9527 command --json '{\"app_name\":\"demo\",\"sql\":\"select 1\"}'
+  mcli --addr 127.0.0.1:9527 put --json-file put.json
+  cat invoke.json | mcli --addr 127.0.0.1:9527 invoke --json-file -
+  mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
+  mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{\"user_key\":\"user-1\"}'";
 
 #[derive(Parser, Debug)]
 #[command(name = "mcli")]
@@ -28,7 +28,7 @@ Examples:
 #[command(about = "TCP protocol client for MuduDB")]
 #[command(after_help = CLI_EXAMPLES)]
 struct Cli {
-    #[arg(long, global = true, default_value = "127.0.0.1:9000")]
+    #[arg(long, global = true, default_value = "127.0.0.1:9527")]
     addr: String,
     #[arg(long, global = true, default_value = "127.0.0.1:8300")]
     http_addr: String,
@@ -121,7 +121,7 @@ async fn run(cli: Cli) -> AppResult<()> {
                 .await
                 .map_err(|e| format!("session-create for put failed: {}", e))?
                 .session_id();
-            let request = with_session_id(request, session_id)?;
+            let request = with_oid(request, session_id)?;
             let mut client = JsonClient::new(client);
             let response = client
                 .put(request)
@@ -143,7 +143,7 @@ async fn run(cli: Cli) -> AppResult<()> {
                 .await
                 .map_err(|e| format!("session-create for get failed: {}", e))?
                 .session_id();
-            let request = with_session_id(request, session_id)?;
+            let request = with_oid(request, session_id)?;
             let mut client = JsonClient::new(client);
             let response = client
                 .get(request)
@@ -165,7 +165,7 @@ async fn run(cli: Cli) -> AppResult<()> {
                 .await
                 .map_err(|e| format!("session-create for range failed: {}", e))?
                 .session_id();
-            let request = with_session_id(request, session_id)?;
+            let request = with_oid(request, session_id)?;
             let mut client = JsonClient::new(client);
             let response = client
                 .range(request)
@@ -187,7 +187,7 @@ async fn run(cli: Cli) -> AppResult<()> {
                 .await
                 .map_err(|e| format!("session-create for invoke failed: {}", e))?
                 .session_id();
-            let request = with_session_id(request, session_id)?;
+            let request = with_invoke_session_id(request, session_id)?;
             let mut client = JsonClient::new(client);
             let response = client
                 .invoke(request)
@@ -268,7 +268,7 @@ fn load_required_text(inline: Option<String>, file: Option<PathBuf>) -> AppResul
     }
 }
 
-fn with_session_id(request: Value, session_id: u128) -> AppResult<Value> {
+fn with_oid(request: Value, session_id: u128) -> AppResult<Value> {
     let mut request = request
         .as_object()
         .cloned()
@@ -280,6 +280,15 @@ fn with_session_id(request: Value, session_id: u128) -> AppResult<Value> {
             "l": session_id as u64,
         }),
     );
+    Ok(Value::Object(request))
+}
+
+fn with_invoke_session_id(request: Value, session_id: u128) -> AppResult<Value> {
+    let mut request = request
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "request JSON must be an object".to_string())?;
+    request.insert("session_id".to_string(), json!(session_id.to_string()));
     Ok(Value::Object(request))
 }
 
@@ -511,10 +520,17 @@ mod tests {
     }
 
     #[test]
-    fn with_session_id_injects_string_value() {
-        let request = with_session_id(json!({"key": "user-1"}), 99).unwrap();
+    fn with_oid_injects_oid_value() {
+        let request = with_oid(json!({"key": "user-1"}), 99).unwrap();
         assert_eq!(request["oid"], json!({"h": 0, "l": 99}));
         assert_eq!(request["key"], json!("user-1"));
+    }
+
+    #[test]
+    fn with_invoke_session_id_injects_session_id_string() {
+        let request = with_invoke_session_id(json!({"procedure_name": "app/mod/proc"}), 99).unwrap();
+        assert_eq!(request["session_id"], json!("99"));
+        assert_eq!(request["procedure_name"], json!("app/mod/proc"));
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {

@@ -1,6 +1,4 @@
-use crate::common::bc::{hdr_size, tail_size};
-use crate::common::bc_dec::{Decode, decode_binary};
-use crate::common::bc_enc::{Encode, encode_binary};
+use crate::common::codec::{Decode, Encode};
 #[cfg(any(test, feature = "test"))]
 use arbitrary::{Arbitrary, Unstructured};
 use std::fmt::Debug;
@@ -17,20 +15,15 @@ pub fn _fuzz_decode_and_encode<'a, T: Arbitrary<'a> + Decode + Encode + Eq + Deb
                 break;
             }
         };
-        let _r = encode_binary(&t);
-        let b = match _r {
-            Ok(b) => b,
-            Err(_e) => {
-                panic!("{:?}", _e);
-            }
-        };
+        let mut b = Vec::new();
+        t.encode(&mut b).unwrap();
         let _size = t.size().unwrap();
         if _size != b.len() {
             let _ = t.size().unwrap();
         }
 
-        assert_eq!(b.len(), _size + hdr_size() + tail_size());
-        let _r = decode_binary::<T>(&b);
+        assert_eq!(b.len(), _size);
+        let _r = T::decode(&mut (b.clone(), 0));
         let _t = match _r {
             Ok(_t) => _t,
             Err(_e) => {

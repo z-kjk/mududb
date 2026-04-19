@@ -6,18 +6,25 @@ use mudu::m_error;
 use mudu_contract::database::attr_value::AttrValue;
 use mudu_contract::{sql_params, sql_stmt};
 use mudu_type::datum::DatumDyn;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use sys_interface::sync_api::{mudu_command, mudu_query};
-use uuid::Uuid;
 
 fn current_timestamp() -> i64 {
-    let now = SystemTime::now();
+    let now = mudu_sys::time::system_time_now();
     let duration_since_epoch = now
         .duration_since(UNIX_EPOCH)
         .expect("SystemTime before UNIX EPOCH!");
 
     let seconds = duration_since_epoch.as_secs();
     seconds as _
+}
+
+fn required_balance(wallet: &Wallets) -> RS<i32> {
+    wallet
+        .get_balance()
+        .as_ref()
+        .copied()
+        .ok_or_else(|| m_error!(MuduError, "wallet balance is null"))
 }
 
 /**mudu-proc**/
@@ -40,8 +47,7 @@ pub fn transfer_funds(xid: XID, from_user_id: i32, to_user_id: i32, amount: i32)
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?;"),
         sql_params!(&(from_user_id,)),
-    )
-    ?;
+    )?;
 
     let from_wallet = if let Some(row) = wallet_rs.next_record()? {
         row
@@ -52,44 +58,43 @@ pub fn transfer_funds(xid: XID, from_user_id: i32, to_user_id: i32, amount: i32)
     if *from_wallet.get_balance().as_ref().unwrap() < amount {
         return Err(m_error!(MuduError, "insufficient funds"));
     }
+    let from_balance = required_balance(&from_wallet)?;
 
     // Check the user account existing
     let to_wallet = mudu_query::<Wallets>(
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?;"),
         sql_params!(&(to_user_id)),
-    )
-    ?;
+    )?;
     let _to_wallet = if let Some(row) = to_wallet.next_record()? {
         row
     } else {
         return Err(m_error!(MuduError, "no such user"));
     };
+    let to_balance = required_balance(&_to_wallet)?;
 
     // Perform a transfer operation
     // 1. Deduct the balance of the account transferred out
     let deduct_updated_rows = mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance - ? WHERE user_id = ?;"),
-        sql_params!(&(amount, from_user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ? WHERE user_id = ?;"),
+        sql_params!(&(from_balance - amount, from_user_id)),
+    )?;
     if deduct_updated_rows != 1 {
         return Err(m_error!(MuduError, "transfer fund failed"));
     }
     // 2. Increase the balance of the transfer-in account
     let increase_updated_rows = mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance + ? WHERE user_id = ?;"),
-        sql_params!(&(amount, to_user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ? WHERE user_id = ?;"),
+        sql_params!(&(to_balance + amount, to_user_id)),
+    )?;
     if increase_updated_rows != 1 {
         return Err(m_error!(MuduError, "transfer fund failed"));
     }
 
     // 3. Entity the transaction
-    let id = Uuid::new_v4().to_string();
+    let id = mudu_sys::random::next_uuid_v4_string();
     let insert_rows = mudu_command(
         xid,
         sql_stmt!(
@@ -100,8 +105,7 @@ pub fn transfer_funds(xid: XID, from_user_id: i32, to_user_id: i32, amount: i32)
         "#
         ),
         sql_params!(&(id, from_user_id, to_user_id, amount)),
-    )
-    ?;
+    )?;
     if insert_rows != 1 {
         return Err(m_error!(MuduError, "transfer fund failed"));
     }
@@ -130,8 +134,7 @@ pub fn create_user(xid: XID, user_id: i32, name: String, email: String) -> RS<()
         xid,
         sql_stmt!(&"INSERT INTO wallets (user_id, balance, updated_at) VALUES (?, ?, ?)"),
         sql_params!(&(user_id, 0, now)),
-    )
-    ?;
+    )?;
 
     if wallet_created != 1 {
         return Err(m_error!(MuduError, "Failed to create wallet"));
@@ -147,8 +150,7 @@ pub fn delete_user(xid: XID, user_id: i32) -> RS<()> {
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
         sql_params!(&(user_id,)),
-    )
-    ?;
+    )?;
 
     let wallet = wallet_rs
         .next_record()?
@@ -166,16 +168,14 @@ pub fn delete_user(xid: XID, user_id: i32) -> RS<()> {
         xid,
         sql_stmt!(&"DELETE FROM wallets WHERE user_id = ?"),
         sql_params!(&(user_id,)),
-    )
-    ?;
+    )?;
 
     // Delete user
     mudu_command(
         xid,
         sql_stmt!(&"DELETE FROM users WHERE user_id = ?"),
         sql_params!(&(user_id,)),
-    )
-    ?;
+    )?;
 
     Ok(())
 }
@@ -217,15 +217,22 @@ pub fn deposit(xid: XID, user_id: i32, amount: i32) -> RS<()> {
     }
 
     let now = current_timestamp();
-    let tx_id = Uuid::new_v4().to_string();
+    let tx_id = mudu_sys::random::next_uuid_v4_string();
+    let wallet = mudu_query::<Wallets>(
+        xid,
+        sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
+        sql_params!(&(user_id,)),
+    )?
+    .next_record()?
+    .ok_or_else(|| m_error!(MuduError, "User wallet not found"))?;
+    let next_balance = required_balance(&wallet)? + amount;
 
     // Update wallet balance
     let updated = mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?"),
-        sql_params!(&(amount, now, user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?"),
+        sql_params!(&(next_balance, now, user_id)),
+    )?;
 
     if updated != 1 {
         return Err(m_error!(MuduError, "User wallet not found"));
@@ -254,8 +261,7 @@ pub fn withdraw(xid: XID, user_id: i32, amount: i32) -> RS<()> {
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
         sql_params!(&(user_id,)),
-    )
-    ?;
+    )?;
 
     let wallet = wallet_rs
         .next_record()?
@@ -266,15 +272,15 @@ pub fn withdraw(xid: XID, user_id: i32, amount: i32) -> RS<()> {
     }
 
     let now = current_timestamp();
-    let tx_id = Uuid::new_v4().to_string();
+    let tx_id = mudu_sys::random::next_uuid_v4_string();
+    let next_balance = required_balance(&wallet)? - amount;
 
     // Update wallet balance
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ?"),
-        sql_params!(&(amount, now, user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?"),
+        sql_params!(&(next_balance, now, user_id)),
+    )?;
 
     // Entity transaction
     mudu_command(
@@ -303,47 +309,42 @@ pub fn transfer(xid: XID, from_user_id: i32, to_user_id: i32, amount: i32) -> RS
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
         sql_params!(&(from_user_id,)),
-    )
-    ?
+    )?
     .next_record()?
     .ok_or_else(|| m_error!(MuduError, "Sender wallet not found"))?;
 
     if *sender_wallet.get_balance().as_ref().unwrap() < amount {
         return Err(m_error!(MuduError, "Insufficient funds"));
     }
+    let sender_balance = required_balance(&sender_wallet)?;
 
     // Check receiver exists
-    let receiver_exists = mudu_query::<Wallets>(
+    let receiver_wallet = mudu_query::<Wallets>(
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
         sql_params!(&(to_user_id.clone(),)),
-    )
-    ?
+    )?
     .next_record()?
-    .is_some();
+    .ok_or_else(|| m_error!(MuduError, "Receiver wallet not found"))?;
 
-    if !receiver_exists {
-        return Err(m_error!(MuduError, "Receiver wallet not found"));
-    }
+    let receiver_balance = required_balance(&receiver_wallet)?;
 
     let now = current_timestamp();
-    let tx_id = Uuid::new_v4().to_string();
+    let tx_id = mudu_sys::random::next_uuid_v4_string();
 
     // Debit sender
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ?"),
-        sql_params!(&(amount, now, from_user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?"),
+        sql_params!(&(sender_balance - amount, now, from_user_id)),
+    )?;
 
     // Credit receiver
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?"),
-        sql_params!(&(amount, now, to_user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?"),
+        sql_params!(&(receiver_balance + amount, now, to_user_id)),
+    )?;
 
     // Entity transaction
     mudu_command(
@@ -376,8 +377,7 @@ pub fn purchase(xid: XID, user_id: i32, amount: i32, description: String) -> RS<
         xid,
         sql_stmt!(&"SELECT user_id, balance, updated_at FROM wallets WHERE user_id = ?"),
         sql_params!(&(user_id,)),
-    )
-    ?
+    )?
     .next_record()?
     .ok_or_else(|| m_error!(MuduError, "Wallet not found"))?;
 
@@ -386,15 +386,15 @@ pub fn purchase(xid: XID, user_id: i32, amount: i32, description: String) -> RS<
     }
 
     let now = current_timestamp();
-    let tx_id = Uuid::new_v4().to_string();
+    let tx_id = mudu_sys::random::next_uuid_v4_string();
+    let next_balance = required_balance(&wallet)? - amount;
 
     // Deduct amount
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ?"),
-        sql_params!(&(amount, now, user_id)),
-    )
-    ?;
+        sql_stmt!(&"UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?"),
+        sql_params!(&(next_balance, now, user_id)),
+    )?;
 
     // Entity transaction
     mudu_command(

@@ -15,15 +15,23 @@ use crate::ast::expr_visitor::ExprVisitor;
 use crate::ast::expression::ExprType;
 use crate::ast::select_term::SelectTerm;
 use crate::ast::stmt_copy_from::StmtCopyFrom;
+use crate::ast::stmt_create_partition_placement::{
+    StmtCreatePartitionPlacement, StmtPartitionPlacementItem,
+};
+use crate::ast::stmt_create_partition_rule::{
+    StmtCreatePartitionRule, StmtPartitionBound, StmtRangePartition,
+};
 use crate::ast::stmt_create_table::StmtCreateTable;
 use crate::ast::stmt_delete::StmtDelete;
 use crate::ast::stmt_drop_table::StmtDropTable;
 use crate::ast::stmt_insert::StmtInsert;
 use crate::ast::stmt_list::StmtList;
 use crate::ast::stmt_select::StmtSelect;
+use crate::ast::stmt_table_partition::StmtTablePartition;
 use crate::ast::stmt_type::{StmtCommand, StmtType};
 use crate::ast::stmt_update::{AssignedValue, Assignment, StmtUpdate};
 use crate::ts_const::{ts_field_name, ts_kind_id};
+use mudu::common::id::AttrIndex;
 use mudu::error::err::MError;
 use mudu::m_error;
 use mudu_binding::universal::uni_dat_type::UniDatType;
@@ -175,6 +183,13 @@ impl SQLParser {
     }
 
     pub fn parse(&self, sql: &str) -> RS<StmtList> {
+        if let Some(stmt_list) = self.try_parse_custom_statement(sql)? {
+            return Ok(stmt_list);
+        }
+        self.parse_standard(sql)
+    }
+
+    fn parse_standard(&self, sql: &str) -> RS<StmtList> {
         let parse_context = ParseContext::new(sql.to_string());
         let mut guard = self.parser.lock().unwrap();
         let opt_tree = guard.parse(sql, None);
@@ -185,6 +200,130 @@ impl SQLParser {
         let vec = self.visit_root(&parse_context, tree.root_node())?;
         let stmt = StmtList::new(vec);
         Ok(stmt)
+    }
+
+    fn try_parse_custom_statement(&self, sql: &str) -> RS<Option<StmtList>> {
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return Ok(Some(StmtList::new(Vec::new())));
+        }
+        let normalized = trimmed.trim_end_matches(';').trim();
+        if normalized.is_empty() {
+            return Ok(Some(StmtList::new(Vec::new())));
+        }
+
+        if starts_with_ignore_ascii_case(normalized, "create partition rule ") {
+            let stmt = self.parse_create_partition_rule_custom(normalized)?;
+            return Ok(Some(StmtList::new(vec![StmtType::Command(
+                StmtCommand::CreatePartitionRule(stmt),
+            )])));
+        }
+
+        if starts_with_ignore_ascii_case(normalized, "create partition placement ") {
+            let stmt = self.parse_create_partition_placement_custom(normalized)?;
+            return Ok(Some(StmtList::new(vec![StmtType::Command(
+                StmtCommand::CreatePartitionPlacement(stmt),
+            )])));
+        }
+
+        if starts_with_ignore_ascii_case(normalized, "create table ")
+            && contains_ignore_ascii_case(normalized, " partition by global rule ")
+        {
+            let stmt = self.parse_create_table_partitioned_custom(normalized)?;
+            return Ok(Some(StmtList::new(vec![StmtType::Command(
+                StmtCommand::CreateTable(stmt),
+            )])));
+        }
+
+        Ok(None)
+    }
+
+    fn parse_create_table_partitioned_custom(&self, sql: &str) -> RS<StmtCreateTable> {
+        let close_index = find_matching_paren(sql, sql.find('(').ok_or_else(|| {
+            m_error!(EC::ParseErr, "partitioned create table has no column list")
+        })?)?;
+        let base_sql = sql[..=close_index].trim();
+        let suffix = sql[close_index + 1..].trim();
+
+        let mut stmt = match self.parse_standard(base_sql)?.stmts().first() {
+            Some(StmtType::Command(StmtCommand::CreateTable(stmt))) => stmt.clone(),
+            _ => {
+                return Err(m_error!(
+                    EC::ParseErr,
+                    "failed to parse base create table statement"
+                ));
+            }
+        };
+        let partition = parse_table_partition_suffix(suffix)?;
+        stmt.set_partition(partition);
+        Ok(stmt)
+    }
+
+    fn parse_create_partition_rule_custom(&self, sql: &str) -> RS<StmtCreatePartitionRule> {
+        let prefix = "create partition rule ";
+        let rest = sql[prefix.len()..].trim();
+        let range_pos = find_keyword_position(rest, "range").ok_or_else(|| {
+            m_error!(EC::ParseErr, "create partition rule must contain RANGE")
+        })?;
+        let rule_name = rest[..range_pos].trim();
+        if rule_name.is_empty() {
+            return Err(m_error!(EC::ParseErr, "partition rule name is empty"));
+        }
+
+        let range_body = rest[range_pos + "range".len()..].trim();
+        if !range_body.starts_with('(') {
+            return Err(m_error!(
+                EC::ParseErr,
+                "partition rule RANGE clause must be wrapped in parentheses"
+            ));
+        }
+        let close_index = find_matching_paren(range_body, 0)?;
+        let inner = range_body[1..close_index].trim();
+        let defs = split_top_level_csv(inner);
+        let mut partitions = Vec::with_capacity(defs.len());
+        for def in defs {
+            partitions.push(parse_range_partition_def(def)?);
+        }
+        Ok(StmtCreatePartitionRule::new(rule_name.to_string(), partitions))
+    }
+
+    fn parse_create_partition_placement_custom(
+        &self,
+        sql: &str,
+    ) -> RS<StmtCreatePartitionPlacement> {
+        let prefix = "create partition placement ";
+        let rest = sql[prefix.len()..].trim();
+        let for_rule_prefix = "for rule ";
+        if !starts_with_ignore_ascii_case(rest, for_rule_prefix) {
+            return Err(m_error!(
+                EC::ParseErr,
+                "create partition placement must use FOR RULE"
+            ));
+        }
+        let rest = rest[for_rule_prefix.len()..].trim();
+        let open_index = rest.find('(').ok_or_else(|| {
+            m_error!(
+                EC::ParseErr,
+                "create partition placement must contain placement list"
+            )
+        })?;
+        let close_index = find_matching_paren(rest, open_index)?;
+        let rule_name = rest[..open_index].trim();
+        let inner = &rest[open_index + 1..close_index];
+        let placements = split_top_level_csv(inner)
+            .into_iter()
+            .map(parse_partition_placement_item)
+            .collect::<RS<Vec<_>>>()?;
+        if rule_name.is_empty() || placements.is_empty() {
+            return Err(m_error!(
+                EC::ParseErr,
+                "invalid create partition placement statement"
+            ));
+        }
+        Ok(StmtCreatePartitionPlacement::new(
+            rule_name.to_string(),
+            placements,
+        ))
     }
 
     fn parse_error(&self, context: &ParseContext, node: &Node) -> RS<()> {
@@ -731,8 +870,7 @@ impl SQLParser {
         let mut index = 0;
         let mut f = |name: String| {
             if let Some(n) = map.get_mut(&name) {
-                n.set_primary_key(true);
-                n.set_index(index);
+                n.set_primary_key_index(Some(index));
                 index += 1;
                 Ok(())
             } else {
@@ -756,23 +894,33 @@ impl SQLParser {
         let opt_n = node.child_by_field_name(ts_field_name::DATA_TYPE);
         let n_data_type = rs_option(opt_n, "")?;
         let (dat_type, opt_type_params) = self.visit_data_type(context, n_data_type)?;
-        let mut column_def = ColumnDef::new(column_name, dat_type, opt_type_params, false);
+        let mut column_def = ColumnDef::new(column_name, dat_type, opt_type_params);
         let mut cursor = node.walk();
         let iter = node.children_by_field_name(ts_field_name::COLUMN_CONSTRAINT, &mut cursor);
+        let mut index_map = HashMap::new();
         for n in iter {
-            self.visit_column_constraint(n, &mut column_def)?;
+            self.visit_column_constraint(n, &mut column_def, &mut index_map)?;
         }
 
         stmt.add_column_def(column_def);
 
         Ok(())
     }
-    fn visit_column_constraint(&self, node: Node, column_def: &mut ColumnDef) -> RS<()> {
+    fn visit_column_constraint(
+        &self,
+        node: Node,
+        column_def: &mut ColumnDef,
+        index_map: &mut HashMap<String, AttrIndex>,
+    ) -> RS<()> {
         if node
             .child_by_field_name(ts_field_name::PRIMARY_KEY)
             .is_some()
         {
-            column_def.set_primary_key(true);
+            let next_index = index_map
+                .entry(ts_field_name::PRIMARY_KEY.to_string())
+                .or_insert(0);
+            column_def.set_primary_key_index(Some(*next_index));
+            *next_index += 1;
         }
         Ok(())
     }
@@ -1011,6 +1159,178 @@ impl SQLParser {
     fn visit_field(&self, context: &ParseContext, node: Node) -> RS<String> {
         ts_node_context_string(context.parse_str(), &node)
     }
+}
+
+fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
+    input
+        .get(..prefix.len())
+        .map(|head| head.eq_ignore_ascii_case(prefix))
+        .unwrap_or(false)
+}
+
+fn contains_ignore_ascii_case(input: &str, needle: &str) -> bool {
+    input.to_ascii_lowercase().contains(&needle.to_ascii_lowercase())
+}
+
+fn find_keyword_position(input: &str, keyword: &str) -> Option<usize> {
+    let lower = input.to_ascii_lowercase();
+    lower.find(&keyword.to_ascii_lowercase())
+}
+
+fn find_matching_paren(input: &str, open_index: usize) -> RS<usize> {
+    let bytes = input.as_bytes();
+    let mut depth = 0usize;
+    let mut in_single_quote = false;
+    for (index, byte) in bytes.iter().enumerate().skip(open_index) {
+        match *byte {
+            b'\'' => in_single_quote = !in_single_quote,
+            b'(' if !in_single_quote => depth += 1,
+            b')' if !in_single_quote => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err(m_error!(EC::ParseErr, "unbalanced parentheses"))
+}
+
+fn split_top_level_csv(input: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut in_single_quote = false;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '\'' => in_single_quote = !in_single_quote,
+            '(' if !in_single_quote => depth += 1,
+            ')' if !in_single_quote => depth = depth.saturating_sub(1),
+            ',' if !in_single_quote && depth == 0 => {
+                items.push(input[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        items.push(tail);
+    }
+    items
+}
+
+fn parse_table_partition_suffix(input: &str) -> RS<StmtTablePartition> {
+    let prefix = "partition by global rule ";
+    if !starts_with_ignore_ascii_case(input, prefix) {
+        return Err(m_error!(
+            EC::ParseErr,
+            "expected PARTITION BY GLOBAL RULE clause"
+        ));
+    }
+    let rest = input[prefix.len()..].trim();
+    let references_pos = find_keyword_position(rest, "references").ok_or_else(|| {
+        m_error!(EC::ParseErr, "partition clause must contain REFERENCES")
+    })?;
+    let rule_name = rest[..references_pos].trim();
+    let refs = rest[references_pos + "references".len()..].trim();
+    if !refs.starts_with('(') {
+        return Err(m_error!(
+            EC::ParseErr,
+            "REFERENCES clause must be wrapped in parentheses"
+        ));
+    }
+    let close_index = find_matching_paren(refs, 0)?;
+    let cols = split_top_level_csv(&refs[1..close_index])
+        .into_iter()
+        .map(|col| col.trim().to_string())
+        .filter(|col| !col.is_empty())
+        .collect::<Vec<_>>();
+    if rule_name.is_empty() || cols.is_empty() {
+        return Err(m_error!(EC::ParseErr, "invalid table partition clause"));
+    }
+    Ok(StmtTablePartition::new(rule_name.to_string(), cols))
+}
+
+fn parse_range_partition_def(input: &str) -> RS<StmtRangePartition> {
+    let prefix = "partition ";
+    if !starts_with_ignore_ascii_case(input, prefix) {
+        return Err(m_error!(
+            EC::ParseErr,
+            format!("invalid partition definition {}", input)
+        ));
+    }
+    let rest = input[prefix.len()..].trim();
+    let values_pos = find_keyword_position(rest, "values").ok_or_else(|| {
+        m_error!(EC::ParseErr, "partition definition must contain VALUES")
+    })?;
+    let name = rest[..values_pos].trim();
+    let after_values = rest[values_pos + "values".len()..].trim();
+    if !starts_with_ignore_ascii_case(after_values, "from") {
+        return Err(m_error!(EC::ParseErr, "partition definition must contain FROM"));
+    }
+    let after_from = after_values["from".len()..].trim();
+    let from_close = find_matching_paren(after_from, 0)?;
+    let start = parse_partition_bound(&after_from[..=from_close])?;
+    let after_start = after_from[from_close + 1..].trim();
+    if !starts_with_ignore_ascii_case(after_start, "to") {
+        return Err(m_error!(EC::ParseErr, "partition definition must contain TO"));
+    }
+    let after_to = after_start["to".len()..].trim();
+    let end_close = find_matching_paren(after_to, 0)?;
+    let end = parse_partition_bound(&after_to[..=end_close])?;
+    Ok(StmtRangePartition::new(name.to_string(), start, end))
+}
+
+fn parse_partition_bound(input: &str) -> RS<StmtPartitionBound> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
+        return Err(m_error!(EC::ParseErr, "partition bound must be parenthesized"));
+    }
+    let items = split_top_level_csv(&trimmed[1..trimmed.len() - 1]);
+    if items.len() == 1
+        && (items[0].eq_ignore_ascii_case("minvalue") || items[0].eq_ignore_ascii_case("maxvalue"))
+    {
+        return Ok(StmtPartitionBound::Unbounded);
+    }
+    let mut values = Vec::with_capacity(items.len());
+    for item in items {
+        if item.eq_ignore_ascii_case("minvalue") || item.eq_ignore_ascii_case("maxvalue") {
+            return Ok(StmtPartitionBound::Unbounded);
+        }
+        values.push(item.trim().as_bytes().to_vec());
+    }
+    Ok(StmtPartitionBound::Value(values))
+}
+
+fn parse_partition_placement_item(input: &str) -> RS<StmtPartitionPlacementItem> {
+    let prefix = "partition ";
+    if !starts_with_ignore_ascii_case(input, prefix) {
+        return Err(m_error!(
+            EC::ParseErr,
+            format!("invalid partition placement item {}", input)
+        ));
+    }
+    let rest = input[prefix.len()..].trim();
+    let on_worker = find_keyword_position(rest, "on worker").ok_or_else(|| {
+        m_error!(
+            EC::ParseErr,
+            "partition placement item must contain ON WORKER"
+        )
+    })?;
+    let partition_name = rest[..on_worker].trim();
+    let worker_id = rest[on_worker + "on worker".len()..].trim();
+    if partition_name.is_empty() || worker_id.is_empty() {
+        return Err(m_error!(
+            EC::ParseErr,
+            format!("invalid partition placement item {}", input)
+        ));
+    }
+    Ok(StmtPartitionPlacementItem::new(
+        partition_name.to_string(),
+        worker_id.to_string(),
+    ))
 }
 
 fn ts_node_context_string(s: &str, n: &Node) -> RS<String> {

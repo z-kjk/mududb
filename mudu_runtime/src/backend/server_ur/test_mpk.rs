@@ -9,16 +9,16 @@ use mudu_binding::procedure::procedure_invoke;
 use mudu_cli::client::client::SyncClient;
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::tuple::tuple_datum::TupleDatum;
-use mudu_kernel::server_ur::procedure_runtime::ProcInvokerPtr;
-use mudu_kernel::server_ur::routing::RoutingMode as KernelRoutingMode;
-use mudu_kernel::server_ur::server::{IoUringTcpBackend, IoUringTcpServerConfig};
+use mudu_kernel::server::async_func_runtime::AsyncFuncInvokerPtr;
+use mudu_kernel::server::routing::RoutingMode as KernelRoutingMode;
+use mudu_kernel::server::server::{IoUringTcpBackend, IoUringTcpServerConfig};
 use mudu_utils::notifier::notify_wait;
 use std::env::temp_dir;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn reserve_port() -> Option<u16> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -29,12 +29,12 @@ fn reserve_port() -> Option<u16> {
 }
 
 fn wait_until_server_ready(port: u16) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
+    let deadline = mudu_sys::time::instant_now() + Duration::from_secs(10);
+    while mudu_sys::time::instant_now() < deadline {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
         }
-        std::thread::sleep(Duration::from_millis(25));
+        mudu_sys::task::sleep_blocking(Duration::from_millis(25));
     }
     panic!("io_uring backend did not become ready on port {}", port);
 }
@@ -105,18 +105,17 @@ fn ensure_kv_package_built() -> RS<PathBuf> {
 }
 
 fn temp_dir_with_prefix(prefix: &str) -> PathBuf {
-    temp_dir().join(format!("{}_{}", prefix, uuid::Uuid::new_v4()))
+    temp_dir().join(format!("{}_{}", prefix, mudu_sys::random::uuid_v4()))
 }
 
 fn build_cfg(port: u16, mpk_path: &Path, data_path: &Path) -> MuduDBCfg {
     let mut cfg = MuduDBCfg::default();
     cfg.mpk_path = mpk_path.to_string_lossy().into_owned();
-    cfg.data_path = data_path.to_string_lossy().into_owned();
+    cfg.db_path = data_path.to_string_lossy().into_owned();
     cfg.listen_ip = "127.0.0.1".to_string();
     cfg.server_mode = ServerMode::IOUring;
     cfg.tcp_listen_port = port;
     cfg.io_uring_worker_threads = 2;
-    cfg.enable_p2 = true;
     cfg.component_target = Some(ComponentTarget::P2);
     cfg.enable_async = true;
     cfg.routing_mode = RoutingMode::ConnectionId;
@@ -139,7 +138,10 @@ fn install_kv_package(app_mgr: &MuduAppMgr, package_path: &Path) -> RS<()> {
     runtime.block_on(async { app_mgr.install(pkg_binary).await })
 }
 
-fn create_procedure_runtimes(app_mgr: &MuduAppMgr, cfg: &MuduDBCfg) -> RS<Vec<ProcInvokerPtr>> {
+fn create_procedure_runtimes(
+    app_mgr: &MuduAppMgr,
+    cfg: &MuduDBCfg,
+) -> RS<Vec<AsyncFuncInvokerPtr>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -203,7 +205,8 @@ fn kv_mpk_can_be_used_by_iouring_backend() -> RS<()> {
         cfg.effective_worker_threads(),
         cfg.listen_ip.clone(),
         cfg.tcp_listen_port,
-        cfg.data_path.clone(),
+        cfg.db_path.clone(),
+        cfg.db_path.clone(),
         KernelRoutingMode::ConnectionId,
         None,
     )?

@@ -91,11 +91,7 @@ impl RuntimeSimple {
         db_path: &String,
         rt_opt: RuntimeOpt,
     ) -> RS<RuntimeSimple> {
-        let wt_runtime = if rt_opt.uses_component_model() {
-            WTRuntime::build_component(&rt_opt)?
-        } else {
-            WTRuntime::build_p1()?
-        };
+        let wt_runtime = WTRuntime::build_component(&rt_opt)?;
         Ok(Self {
             rt_opt,
             package_path: package_path.clone(),
@@ -142,8 +138,9 @@ impl RuntimeSimple {
             &self.db_path,
             &app_package,
             modules,
-            self.rt_opt.target,
+            self.rt_opt.component_target(),
             self.rt_opt.enable_async,
+            self.rt_opt.sever_mode,
         )
         .await?;
         let mpk_name = app_instance.name().clone();

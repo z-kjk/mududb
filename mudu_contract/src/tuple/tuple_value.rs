@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
 use mudu_type::dat_value::DatValue;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TupleValue {
     value: Vec<DatValue>,
 }

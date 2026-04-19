@@ -32,7 +32,9 @@ impl UniPrimitive {
             UniPrimitive::U64 => {
                 unimplemented!()
             }
+            UniPrimitive::U128 => DatType::default_for(DatTypeID::U128),
             UniPrimitive::I64 => DatType::default_for(DatTypeID::I64),
+            UniPrimitive::I128 => DatType::default_for(DatTypeID::I128),
             UniPrimitive::F32 => DatType::default_for(DatTypeID::F32),
             UniPrimitive::F64 => DatType::default_for(DatTypeID::F64),
             UniPrimitive::Char => {
@@ -48,6 +50,8 @@ impl UniPrimitive {
         let uni_prim = match ty.dat_type_id() {
             DatTypeID::I32 => Self::I32,
             DatTypeID::I64 => Self::I64,
+            DatTypeID::I128 => Self::I128,
+            DatTypeID::U128 => Self::U128,
             DatTypeID::F32 => Self::F32,
             DatTypeID::F64 => Self::F64,
             DatTypeID::String => Self::String,

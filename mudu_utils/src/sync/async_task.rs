@@ -1,12 +1,11 @@
 use crate::notifier::{NotifyWait, Waiter};
 use crate::sync::unique_inner::UniqueInner;
 use crate::task::{spawn_local_task, spawn_task};
-use futures::future::select_all;
+use futures::future::try_join_all;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use std::any::Any;
-use std::pin::Pin;
 use tokio::task::{JoinHandle, LocalSet};
 pub trait Task: Any {}
 
@@ -134,44 +133,30 @@ impl TaskWrapper {
     }
 
     pub async fn join_all(result: Vec<AsyncResult>) -> RS<()> {
-        let mut result = result;
-        let mut local_sets = vec![];
-        for r in result.iter_mut() {
-            let mut opt = None;
-            std::mem::swap(&mut r.opt_local, &mut opt);
-            match opt {
-                Some(r) => {
-                    local_sets.push(r);
+        let futures = result.into_iter().map(|r| async move {
+            let AsyncResult {
+                opt_local,
+                join_handle,
+            } = r;
+            match opt_local {
+                Some(local_set) => {
+                    let _opt = local_set
+                        .run_until(async move {
+                            join_handle
+                                .await
+                                .map_err(|e| m_error!(EC::InternalErr, "join error", e))
+                        })
+                        .await?;
                 }
-                None => {}
+                None => {
+                    let _opt = join_handle
+                        .await
+                        .map_err(|e| m_error!(EC::InternalErr, "join error", e))?;
+                }
             }
-        }
-        let mut pinned_futures: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
-
-        for ls in local_sets {
-            let future = async move {
-                ls.run_until(std::future::pending::<()>()).await;
-            };
-            pinned_futures.push(Box::pin(future));
-        }
-        // wait local set
-        while !pinned_futures.is_empty() {
-            let (_, index, remaining) = select_all(pinned_futures).await;
-            println!(
-                "One LocalSet {} mpleted, {} remaining",
-                index,
-                remaining.len()
-            );
-            pinned_futures = remaining;
-        }
-        // wait all task join
-        for r in result.into_iter() {
-            let _opt = r
-                .join_handle
-                .await
-                .map_err(|e| m_error!(EC::InternalErr, "join error", e))?;
-        }
-
+            Ok(())
+        });
+        try_join_all(futures).await?;
         Ok(())
     }
 

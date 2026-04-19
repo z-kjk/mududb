@@ -1,125 +1,397 @@
-use crate::contract::meta_mgr::MetaMgr;
-use crate::contract::schema_table::SchemaTable;
-use crate::contract::table_desc::TableDesc;
-use crate::contract::table_info::TableInfo;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use async_trait::async_trait;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
-use mudu::common::result_of::rs_io;
 use mudu::error::ec::EC as ER;
 use mudu::m_error;
-use std::collections::HashMap;
-use std::fs;
-use std::fs::{File, OpenOptions};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tracing::info;
+
+use crate::contract::meta_mgr::MetaMgr;
+use crate::contract::partition_rule::PartitionRuleDesc;
+use crate::contract::partition_rule_binding::{PartitionPlacement, TablePartitionBinding};
+use crate::contract::schema_table::SchemaTable;
+use crate::contract::table_desc::TableDesc;
+use crate::contract::table_info::TableInfo;
+use crate::meta::partition_binding_catalog::{
+    load_partition_bindings_from_catalog, open_partition_binding_catalog,
+    write_partition_binding_to_catalog,
+};
+use crate::meta::partition_placement_catalog::{
+    load_partition_placements_from_catalog, open_partition_placement_catalog,
+    write_partition_placement_to_catalog,
+};
+use crate::meta::partition_rule_catalog::{
+    load_partition_rules_from_catalog, open_partition_rule_catalog, write_partition_rule_to_catalog,
+};
+use crate::meta::schema_catalog::{
+    delete_schema_from_catalog, load_schemas_from_catalog, open_schema_catalog,
+    write_schema_to_catalog,
+};
+use crate::storage::relation::relation::Relation;
+
+type MetaMgrRegistry = HashMap<String, Vec<Weak<MetaMgrImpl>>>;
+
+fn registry() -> &'static StdMutex<MetaMgrRegistry> {
+    static REGISTRY: OnceLock<StdMutex<MetaMgrRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn ddl_lock() -> &'static tokio::sync::Mutex<()> {
+    static DDL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    DDL_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 pub struct MetaMgrImpl {
     path: String,
+    schema_catalog: Relation,
+    partition_rule_catalog: Relation,
+    partition_binding_catalog: Relation,
+    partition_placement_catalog: Relation,
+    next_catalog_xid: AtomicU64,
     id2table: scc::HashMap<OID, TableInfo>,
     name2id: scc::HashMap<String, OID>,
     table: scc::HashMap<String, TableInfo>,
+    rule_by_id: scc::HashMap<OID, PartitionRuleDesc>,
+    rule_name2id: scc::HashMap<String, OID>,
+    binding_by_table_id: scc::HashMap<OID, TablePartitionBinding>,
+    placement_by_partition_id: scc::HashMap<OID, OID>,
 }
 
 impl MetaMgrImpl {
     pub fn new<P: AsRef<Path>>(path: P) -> RS<Self> {
-        let mut hash_table = HashMap::new();
         let path = PathBuf::from(path.as_ref());
-        if fs::metadata(path.clone()).is_err() {
-            fs::create_dir(path.clone()).map_err(|e| m_error!(ER::IOErr, "", e))?;
+        if fs::metadata(&path).is_err() {
+            fs::create_dir_all(&path).map_err(|e| m_error!(ER::IOErr, "", e))?;
         }
 
-        for entry in rs_io(fs::read_dir(path.clone()))? {
-            let entry = rs_io(entry)?;
-            let path = entry.path();
-
-            let metadata = rs_io(fs::metadata(&path))?;
-            if metadata.is_file() {
-                let schema = Self::read_schema_from_file(&path.to_str().unwrap().to_string())?;
-                hash_table.insert(schema.table_name().to_string(), TableInfo::new(schema)?);
-            }
-        }
-
-        Ok(Self {
-            path: path.to_str().unwrap().to_string(),
+        let path_string = path.to_string_lossy().to_string();
+        let schema_catalog = open_schema_catalog(&path_string)?;
+        let partition_rule_catalog = open_partition_rule_catalog(&path_string)?;
+        let partition_binding_catalog = open_partition_binding_catalog(&path_string)?;
+        let partition_placement_catalog = open_partition_placement_catalog(&path_string)?;
+        let this = Self {
+            path: path_string,
+            schema_catalog,
+            partition_rule_catalog,
+            partition_binding_catalog,
+            partition_placement_catalog,
+            next_catalog_xid: AtomicU64::new(now_catalog_xid()),
             id2table: Default::default(),
             name2id: Default::default(),
             table: Default::default(),
-        })
+            rule_by_id: Default::default(),
+            rule_name2id: Default::default(),
+            binding_by_table_id: Default::default(),
+            placement_by_partition_id: Default::default(),
+        };
+        for schema in load_schemas_from_catalog(&this.schema_catalog)? {
+            this.apply_create_table_local(&schema)?;
+        }
+        for rule in load_partition_rules_from_catalog(&this.partition_rule_catalog)? {
+            this.apply_create_partition_rule_local(&rule);
+        }
+        for binding in load_partition_bindings_from_catalog(&this.partition_binding_catalog)? {
+            this.apply_bind_table_partition_local(&binding);
+        }
+        for placement in load_partition_placements_from_catalog(&this.partition_placement_catalog)? {
+            this.apply_partition_placement_local(&placement);
+        }
+        Ok(this)
     }
 
-    pub fn get_table_by_id(&self, oid: OID) -> Option<TableInfo> {
+    pub fn register_global(self: &Arc<Self>) {
+        let mut guard = registry().lock().unwrap();
+        guard
+            .entry(self.path.clone())
+            .or_default()
+            .push(Arc::downgrade(self));
+    }
+
+    pub fn lookup_table_info_by_id(&self, oid: OID) -> Option<TableInfo> {
         let opt = self.id2table.get_sync(&oid);
-        opt.map(|e| e.get().clone())
+        opt.map(|entry| entry.get().clone())
     }
 
-    pub fn get_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
+    pub fn lookup_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
         let opt = self.table.get_sync(name);
         let table_desc = match opt {
             None => return Ok(None),
-            Some(t) => t.get().table_desc()?,
+            Some(table) => table.get().table_desc()?,
         };
         Ok(Some(table_desc))
     }
 
-    pub fn _create_table(&self, schema: &SchemaTable) -> RS<()> {
-        if !self.table.contains_sync(schema.table_name()) {
-            let table_name = schema.table_name().clone();
-            let mut pb = PathBuf::from(self.path.clone());
-            pb.push(format!("{}.json", schema.table_name().clone()));
-            let r = Self::write_schema_to_file(&pb.to_str().unwrap().to_string(), &schema);
-            match r {
-                Ok(_) => {}
-                Err(e) => {
-                    info!("{:?}", e)
-                }
-            }
-            let table_id = schema.id();
-            let table = TableInfo::new(schema.clone())?;
-            let _ = self.table.insert_sync(table_name.clone(), table.clone());
-            let _ = self.id2table.insert_sync(table_id, table);
-            let _ = self.name2id.insert_sync(table_name, table_id);
-        } else {
+    pub fn list_schemas_inner(&self) -> Vec<SchemaTable> {
+        let mut schemas = Vec::new();
+        self.table.iter_sync(|_table_name, table_info| {
+            schemas.push(table_info.schema().as_ref().clone());
+            true
+        });
+        schemas.sort_by_key(|schema| schema.id());
+        schemas
+    }
+
+    pub fn lookup_partition_rule_by_id(&self, oid: OID) -> Option<PartitionRuleDesc> {
+        self.rule_by_id.get_sync(&oid).map(|entry| entry.get().clone())
+    }
+
+    pub fn lookup_partition_rule_by_name(&self, name: &str) -> Option<PartitionRuleDesc> {
+        let rule_id = self.rule_name2id.get_sync(name).map(|entry| *entry.get())?;
+        self.lookup_partition_rule_by_id(rule_id)
+    }
+
+    pub fn list_partition_rules_inner(&self) -> Vec<PartitionRuleDesc> {
+        let mut rules = Vec::new();
+        self.rule_by_id.iter_sync(|_rule_id, rule| {
+            rules.push(rule.clone());
+            true
+        });
+        rules.sort_by_key(|rule| rule.oid);
+        rules
+    }
+
+    pub fn lookup_table_partition_binding(&self, table_id: OID) -> Option<TablePartitionBinding> {
+        self.binding_by_table_id
+            .get_sync(&table_id)
+            .map(|entry| entry.get().clone())
+    }
+
+    pub fn list_partition_placements_inner(&self) -> Vec<PartitionPlacement> {
+        let mut placements = Vec::new();
+        self.placement_by_partition_id
+            .iter_sync(|partition_id, worker_id| {
+                placements.push(PartitionPlacement {
+                    partition_id: *partition_id,
+                    worker_id: *worker_id,
+                });
+                true
+            });
+        placements.sort_by_key(|placement| placement.partition_id);
+        placements
+    }
+
+    pub async fn create_table_inner(&self, schema: &SchemaTable) -> RS<()> {
+        let _ddl_guard = ddl_lock().lock().await;
+        if self.table.contains_sync(schema.table_name()) {
             return Err(m_error!(ER::ExistingSuchElement, ""));
+        }
+
+        write_schema_to_catalog(&self.schema_catalog, schema, self.next_catalog_xid()).await?;
+        self.broadcast_create(schema)
+    }
+
+    pub async fn drop_table_inner(&self, oid: OID) -> RS<()> {
+        let _ddl_guard = ddl_lock().lock().await;
+        let table = self
+            .lookup_table_info_by_id(oid)
+            .ok_or_else(|| m_error!(ER::NoSuchElement, format!("no such table {}", oid)))?;
+
+        delete_schema_from_catalog(&self.schema_catalog, oid, self.next_catalog_xid()).await?;
+        self.broadcast_drop(table.schema().table_name(), oid)
+    }
+
+    pub async fn create_partition_rule_inner(&self, rule: &PartitionRuleDesc) -> RS<()> {
+        let _ddl_guard = ddl_lock().lock().await;
+        if self.rule_name2id.contains_sync(&rule.name) {
+            return Err(m_error!(
+                ER::ExistingSuchElement,
+                format!("partition rule {} already exists", rule.name)
+            ));
+        }
+        write_partition_rule_to_catalog(
+            &self.partition_rule_catalog,
+            rule,
+            self.next_catalog_xid(),
+        )
+        .await?;
+        self.broadcast_create_partition_rule(rule)
+    }
+
+    pub async fn bind_table_partition_inner(&self, binding: &TablePartitionBinding) -> RS<()> {
+        let _ddl_guard = ddl_lock().lock().await;
+        if self.lookup_table_info_by_id(binding.table_id).is_none() {
+            return Err(m_error!(
+                ER::NoSuchElement,
+                format!("no such table {}", binding.table_id)
+            ));
+        }
+        if self.lookup_partition_rule_by_id(binding.rule_id).is_none() {
+            return Err(m_error!(
+                ER::NoSuchElement,
+                format!("no such partition rule {}", binding.rule_id)
+            ));
+        }
+        write_partition_binding_to_catalog(
+            &self.partition_binding_catalog,
+            binding,
+            self.next_catalog_xid(),
+        )
+        .await?;
+        self.broadcast_bind_table_partition(binding)
+    }
+
+    pub async fn upsert_partition_placements_inner(
+        &self,
+        placements: &[PartitionPlacement],
+    ) -> RS<()> {
+        let _ddl_guard = ddl_lock().lock().await;
+        for placement in placements {
+            write_partition_placement_to_catalog(
+                &self.partition_placement_catalog,
+                placement,
+                self.next_catalog_xid(),
+            )
+            .await?;
+        }
+        self.broadcast_upsert_partition_placements(placements)
+    }
+
+    fn next_catalog_xid(&self) -> u64 {
+        let mut next = self.next_catalog_xid.load(Ordering::Relaxed);
+        loop {
+            let candidate = now_catalog_xid().max(next.saturating_add(1));
+            match self.next_catalog_xid.compare_exchange(
+                next,
+                candidate,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return candidate,
+                Err(actual) => next = actual,
+            }
+        }
+    }
+
+    fn apply_create_table_local(&self, schema: &SchemaTable) -> RS<()> {
+        let table_id = schema.id();
+        let table_name = schema.table_name().clone();
+        let table = TableInfo::new(schema.clone())?;
+        let _ = self.table.insert_sync(table_name.clone(), table.clone());
+        let _ = self.id2table.insert_sync(table_id, table);
+        let _ = self.name2id.insert_sync(table_name, table_id);
+        Ok(())
+    }
+
+    fn apply_drop_table_local(&self, table_name: &str, oid: OID) {
+        let _ = self.id2table.remove_sync(&oid);
+        let _ = self.name2id.remove_sync(table_name);
+        let _ = self.table.remove_sync(table_name);
+    }
+
+    fn apply_create_partition_rule_local(&self, rule: &PartitionRuleDesc) {
+        let _ = self.rule_name2id.insert_sync(rule.name.clone(), rule.oid);
+        let _ = self.rule_by_id.insert_sync(rule.oid, rule.clone());
+    }
+
+    fn apply_bind_table_partition_local(&self, binding: &TablePartitionBinding) {
+        let _ = self
+            .binding_by_table_id
+            .insert_sync(binding.table_id, binding.clone());
+    }
+
+    fn apply_partition_placement_local(&self, placement: &PartitionPlacement) {
+        let _ = self
+            .placement_by_partition_id
+            .insert_sync(placement.partition_id, placement.worker_id);
+    }
+
+    fn broadcast_create(&self, schema: &SchemaTable) -> RS<()> {
+        let peers = self.peer_instances();
+        if peers.is_empty() {
+            return self.apply_create_table_local(schema);
+        }
+        for mgr in peers {
+            mgr.apply_create_table_local(schema)?;
         }
         Ok(())
     }
 
-    fn read_schema_from_file(path: &String) -> RS<SchemaTable> {
-        let r_open = File::open(path);
-        let file = rs_io(r_open)?;
-        let r_from_reader = serde_json::from_reader::<_, SchemaTable>(file);
-        let schema = match r_from_reader {
-            Ok(e) => e,
-            Err(e) => {
-                return Err(m_error!(ER::DecodeErr, "read schema error", e));
-            }
-        };
-        Ok(schema)
+    fn broadcast_drop(&self, table_name: &str, oid: OID) -> RS<()> {
+        let peers = self.peer_instances();
+        if peers.is_empty() {
+            self.apply_drop_table_local(table_name, oid);
+            return Ok(());
+        }
+        for mgr in peers {
+            mgr.apply_drop_table_local(table_name, oid);
+        }
+        Ok(())
     }
 
-    fn write_schema_to_file(path: &String, schema: &SchemaTable) -> RS<()> {
-        let r_open = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(path);
-        let file = rs_io(r_open)?;
-        let r = serde_json::to_writer_pretty(file, schema);
-        match r {
-            Ok(_) => Ok(()),
-            Err(e) => Err(m_error!(ER::EncodeErr, "write schema error", e)),
+    fn broadcast_create_partition_rule(&self, rule: &PartitionRuleDesc) -> RS<()> {
+        let peers = self.peer_instances();
+        if peers.is_empty() {
+            self.apply_create_partition_rule_local(rule);
+            return Ok(());
         }
+        for mgr in peers {
+            mgr.apply_create_partition_rule_local(rule);
+        }
+        Ok(())
     }
+
+    fn broadcast_bind_table_partition(&self, binding: &TablePartitionBinding) -> RS<()> {
+        let peers = self.peer_instances();
+        if peers.is_empty() {
+            self.apply_bind_table_partition_local(binding);
+            return Ok(());
+        }
+        for mgr in peers {
+            mgr.apply_bind_table_partition_local(binding);
+        }
+        Ok(())
+    }
+
+    fn broadcast_upsert_partition_placements(&self, placements: &[PartitionPlacement]) -> RS<()> {
+        let peers = self.peer_instances();
+        if peers.is_empty() {
+            for placement in placements {
+                self.apply_partition_placement_local(placement);
+            }
+            return Ok(());
+        }
+        for mgr in peers {
+            for placement in placements {
+                mgr.apply_partition_placement_local(placement);
+            }
+        }
+        Ok(())
+    }
+
+    fn peer_instances(&self) -> Vec<Arc<MetaMgrImpl>> {
+        let mut guard = registry().lock().unwrap();
+        let peers = guard.entry(self.path.clone()).or_default();
+        let mut live = Vec::with_capacity(peers.len());
+        peers.retain(|weak| match weak.upgrade() {
+            Some(peer) => {
+                live.push(peer);
+                true
+            }
+            None => false,
+        });
+        live
+    }
+}
+
+fn now_catalog_xid() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u64::MAX as u128) as u64
 }
 
 #[async_trait]
 impl MetaMgr for MetaMgrImpl {
     async fn get_table_by_id(&self, oid: OID) -> RS<Arc<TableDesc>> {
-        let opt = self.get_table_by_id(oid);
+        let opt = self.lookup_table_info_by_id(oid);
         match opt {
-            Some(t) => t.table_desc(),
+            Some(table) => table.table_desc(),
             None => Err(m_error!(
                 ER::NoSuchElement,
                 format!("no such table {}", oid)
@@ -128,18 +400,136 @@ impl MetaMgr for MetaMgrImpl {
     }
 
     async fn get_table_by_name(&self, name: &String) -> RS<Option<Arc<TableDesc>>> {
-        self.get_table_by_name(name)
+        self.lookup_table_by_name(name)
     }
 
     async fn create_table(&self, schema: &SchemaTable) -> RS<()> {
-        self._create_table(schema)
+        self.create_table_inner(schema).await
     }
 
-    async fn drop_table(&self, _oid: OID) -> RS<()> {
-        todo!()
+    async fn drop_table(&self, table_id: OID) -> RS<()> {
+        self.drop_table_inner(table_id).await
+    }
+
+    async fn create_partition_rule(&self, rule: &PartitionRuleDesc) -> RS<()> {
+        self.create_partition_rule_inner(rule).await
+    }
+
+    async fn get_partition_rule_by_id(&self, oid: OID) -> RS<PartitionRuleDesc> {
+        self.lookup_partition_rule_by_id(oid).ok_or_else(|| {
+            m_error!(ER::NoSuchElement, format!("no such partition rule {}", oid))
+        })
+    }
+
+    async fn get_partition_rule_by_name(&self, name: &str) -> RS<Option<PartitionRuleDesc>> {
+        Ok(self.lookup_partition_rule_by_name(name))
+    }
+
+    async fn list_partition_rules(&self) -> RS<Vec<PartitionRuleDesc>> {
+        Ok(self.list_partition_rules_inner())
+    }
+
+    async fn bind_table_partition(&self, binding: &TablePartitionBinding) -> RS<()> {
+        self.bind_table_partition_inner(binding).await
+    }
+
+    async fn get_table_partition_binding(
+        &self,
+        table_id: OID,
+    ) -> RS<Option<TablePartitionBinding>> {
+        Ok(self.lookup_table_partition_binding(table_id))
+    }
+
+    async fn upsert_partition_placements(&self, placements: &[PartitionPlacement]) -> RS<()> {
+        self.upsert_partition_placements_inner(placements).await
+    }
+
+    async fn get_partition_worker(&self, partition_id: OID) -> RS<Option<OID>> {
+        Ok(self
+            .placement_by_partition_id
+            .get_sync(&partition_id)
+            .map(|entry| *entry.get()))
+    }
+
+    async fn list_partition_placements(&self) -> RS<Vec<PartitionPlacement>> {
+        Ok(self.list_partition_placements_inner())
+    }
+
+    async fn list_schemas(&self) -> RS<Vec<SchemaTable>> {
+        Ok(self.list_schemas_inner())
     }
 }
 
 unsafe impl Sync for MetaMgrImpl {}
 
 unsafe impl Send for MetaMgrImpl {}
+
+#[cfg(test)]
+mod tests {
+    use std::env::temp_dir;
+
+    use mudu_type::dat_type_id::DatTypeID;
+    use mudu_type::dt_info::DTInfo;
+
+    use crate::contract::schema_column::SchemaColumn;
+
+    use super::*;
+
+    fn test_schema() -> SchemaTable {
+        SchemaTable::new(
+            "meta_recovery_t".to_string(),
+            vec![
+                SchemaColumn::new(
+                    "id".to_string(),
+                    DatTypeID::I32,
+                    DTInfo::from_text(DatTypeID::I32, String::new()),
+                ),
+                SchemaColumn::new(
+                    "v".to_string(),
+                    DatTypeID::I32,
+                    DTInfo::from_text(DatTypeID::I32, String::new()),
+                ),
+            ],
+            vec![0],
+            vec![1],
+        )
+    }
+
+    #[test]
+    fn meta_mgr_recovers_schema_catalog_after_reopen() {
+        let dir = temp_dir().join(format!("meta_mgr_catalog_{}", mudu::common::id::gen_oid()));
+        let mgr = Arc::new(MetaMgrImpl::new(&dir).unwrap());
+        mgr.register_global();
+
+        let schema = test_schema();
+        futures::executor::block_on(mgr.create_table(&schema)).unwrap();
+        assert_eq!(
+            crate::meta::schema_catalog::load_schemas_from_catalog(&mgr.schema_catalog)
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(mgr);
+
+        let reopened = MetaMgrImpl::new(&dir).unwrap();
+        let table = futures::executor::block_on(reopened.get_table_by_id(schema.id())).unwrap();
+        assert_eq!(table.name(), schema.table_name());
+    }
+
+    #[test]
+    fn meta_mgr_broadcasts_ddl_to_peer_instances() {
+        let dir = temp_dir().join(format!("meta_mgr_peer_{}", mudu::common::id::gen_oid()));
+        let mgr1 = Arc::new(MetaMgrImpl::new(&dir).unwrap());
+        mgr1.register_global();
+        let mgr2 = Arc::new(MetaMgrImpl::new(&dir).unwrap());
+        mgr2.register_global();
+
+        let schema = test_schema();
+        futures::executor::block_on(mgr1.create_table(&schema)).unwrap();
+        let table = futures::executor::block_on(mgr2.get_table_by_id(schema.id())).unwrap();
+        assert_eq!(table.name(), schema.table_name());
+
+        futures::executor::block_on(mgr2.drop_table(schema.id())).unwrap();
+        assert!(futures::executor::block_on(mgr1.get_table_by_id(schema.id())).is_err());
+    }
+}

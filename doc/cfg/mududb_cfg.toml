@@ -14,7 +14,6 @@ http_worker_threads = 1
 pg_listen_port = 5432
 
 # Enable the WASI component runtime used by the new backend.
-enable_p2 = true
 enable_async = true
 
 # 0 = Legacy

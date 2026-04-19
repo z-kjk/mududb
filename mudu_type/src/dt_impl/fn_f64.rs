@@ -96,7 +96,7 @@ pub fn fn_f64_send_to(v: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, 
 }
 
 pub fn fn_f64_recv(buf: &[u8], _: &DatType) -> Result<(DatValue, u32), TyErr> {
-    if size_of::<f64>() < buf.len() {
+    if buf.len() < size_of::<f64>() {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "insufficient space".to_string(),

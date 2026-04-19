@@ -131,11 +131,18 @@ pub fn fn_binary_send(dat_value: &DatValue, dat_type: &DatType) -> Result<DatBin
 pub fn fn_binary_send_to(object: &DatValue, _: &DatType, buf: &mut [u8]) -> Result<u32, TyErr> {
     let datum_binary: &Vec<u8> = object.expect_binary();
     let hdr_size = header_size();
+    let total_len = hdr_size + datum_binary.len();
+    if buf.len() < total_len {
+        return Err(TyErr::new(
+            TyEC::InsufficientSpace,
+            "insufficient space".to_string(),
+        ));
+    }
     let offset = hdr_size as u32;
-    buf[offset as usize..].copy_from_slice(datum_binary);
-    let binary_bytes = BinSize::new(offset);
+    buf[offset as usize..offset as usize + datum_binary.len()].copy_from_slice(datum_binary);
+    let binary_bytes = BinSize::new(total_len as u32);
     binary_bytes.copy_to_slice(&mut buf[0..BinSize::size_of()]);
-    Ok(offset)
+    Ok(total_len as u32)
 }
 
 pub fn fn_binary_recv(buf: &[u8], _: &DatType) -> Result<(DatValue, u32), TyErr> {
@@ -147,16 +154,17 @@ pub fn fn_binary_recv(buf: &[u8], _: &DatType) -> Result<(DatValue, u32), TyErr>
     }
 
     let binary_bytes = BinSize::from_slice(&buf[0..BinSize::size_of()]).size();
-    if buf.len() < binary_bytes as usize {
+    if buf.len() < binary_bytes as usize || (binary_bytes as usize) < header_size() {
         return Err(TyErr::new(
             TyEC::InsufficientSpace,
             "space insufficient error".to_string(),
         ));
     }
 
-    let mut binary = Vec::with_capacity(binary_bytes as usize);
-    binary.resize(binary_bytes as usize, 0);
-    binary.copy_from_slice(&buf[header_size()..]);
+    let data_len = binary_bytes as usize - header_size();
+    let mut binary = Vec::with_capacity(data_len);
+    binary.resize(data_len, 0);
+    binary.copy_from_slice(&buf[header_size()..binary_bytes as usize]);
     Ok((DatValue::from_binary(binary), binary_bytes))
 }
 

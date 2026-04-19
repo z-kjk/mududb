@@ -1,6 +1,9 @@
+use crate::tuple::tuple_field_desc::TupleFieldDesc;
+use crate::tuple::tuple_value::TupleValue;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const HEADER_LEN: usize = 20;
@@ -12,14 +15,47 @@ pub enum MessageType {
     Auth = 2,
     Query = 3,
     Execute = 4,
-    Response = 5,
-    Error = 6,
-    Get = 7,
-    Put = 8,
-    RangeScan = 9,
-    ProcedureInvoke = 10,
-    SessionCreate = 11,
-    SessionClose = 12,
+    Batch = 5,
+    Response = 6,
+    Error = 7,
+    Get = 8,
+    Put = 9,
+    RangeScan = 10,
+    ProcedureInvoke = 11,
+    SessionCreate = 12,
+    SessionClose = 13,
+}
+
+impl From<MessageType> for u16 {
+    fn from(value: MessageType) -> Self {
+        value as u16
+    }
+}
+
+impl TryFrom<u16> for MessageType {
+    type Error = mudu::error::err::MError;
+
+    fn try_from(value: u16) -> RS<Self> {
+        match value {
+            1 => Ok(MessageType::Handshake),
+            2 => Ok(MessageType::Auth),
+            3 => Ok(MessageType::Query),
+            4 => Ok(MessageType::Execute),
+            5 => Ok(MessageType::Batch),
+            6 => Ok(MessageType::Response),
+            7 => Ok(MessageType::Error),
+            8 => Ok(MessageType::Get),
+            9 => Ok(MessageType::Put),
+            10 => Ok(MessageType::RangeScan),
+            11 => Ok(MessageType::ProcedureInvoke),
+            12 => Ok(MessageType::SessionCreate),
+            13 => Ok(MessageType::SessionClose),
+            _ => Err(m_error!(
+                EC::ParseErr,
+                format!("unknown message type {}", value)
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,14 +70,15 @@ pub struct FrameHeader {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientRequest {
+    oid: u128,
     app_name: String,
     sql: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerResponse {
-    columns: Vec<String>,
-    rows: Vec<Vec<String>>,
+    row_desc: TupleFieldDesc,
+    rows: Vec<TupleValue>,
     affected_rows: u64,
     error: Option<String>,
 }
@@ -133,23 +170,30 @@ pub struct Frame {
 impl Frame {
     pub fn new(message_type: MessageType, request_id: u64, payload: Vec<u8>) -> Self {
         Self {
-            header: FrameHeader {
-                magic: MAGIC,
-                version: 1,
-                message_type,
-                flags: 0,
-                request_id,
-                payload_len: payload.len() as u32,
-            },
+            header: FrameHeader::new(message_type, request_id, payload.len() as u32),
             payload,
         }
+    }
+
+    pub fn from_parts(header: FrameHeader, payload: Vec<u8>) -> RS<Self> {
+        if header.payload_len() as usize != payload.len() {
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "frame payload length mismatch: header {}, actual {}",
+                    header.payload_len(),
+                    payload.len()
+                )
+            ));
+        }
+        Ok(Self { header, payload })
     }
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_LEN + self.payload.len());
         out.extend_from_slice(&self.header.magic.to_be_bytes());
         out.extend_from_slice(&self.header.version.to_be_bytes());
-        out.extend_from_slice(&(self.header.message_type as u16).to_be_bytes());
+        out.extend_from_slice(&u16::from(self.header.message_type).to_be_bytes());
         out.extend_from_slice(&self.header.flags.to_be_bytes());
         out.extend_from_slice(&self.header.request_id.to_be_bytes());
         out.extend_from_slice(&self.header.payload_len.to_be_bytes());
@@ -161,46 +205,13 @@ impl Frame {
         if buf.len() < HEADER_LEN {
             return Err(m_error!(EC::ParseErr, "frame header is incomplete"));
         }
-        let magic = u16::from_be_bytes([buf[0], buf[1]]);
-        if magic != MAGIC {
-            return Err(m_error!(EC::ParseErr, "invalid frame magic"));
-        }
-        let version = u16::from_be_bytes([buf[2], buf[3]]);
-        let message_type = match u16::from_be_bytes([buf[4], buf[5]]) {
-            1 => MessageType::Handshake,
-            2 => MessageType::Auth,
-            3 => MessageType::Query,
-            4 => MessageType::Execute,
-            5 => MessageType::Response,
-            6 => MessageType::Error,
-            7 => MessageType::Get,
-            8 => MessageType::Put,
-            9 => MessageType::RangeScan,
-            10 => MessageType::ProcedureInvoke,
-            11 => MessageType::SessionCreate,
-            12 => MessageType::SessionClose,
-            _ => return Err(m_error!(EC::ParseErr, "unknown message type")),
-        };
-        let flags = u16::from_be_bytes([buf[6], buf[7]]);
-        let request_id = u64::from_be_bytes([
-            buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
-        ]);
-        let payload_len = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+        let header = FrameHeader::decode_header_bytes(&buf[..HEADER_LEN])?;
+        let payload_len = header.payload_len();
         let total_len = HEADER_LEN + payload_len as usize;
         if buf.len() < total_len {
             return Err(m_error!(EC::ParseErr, "frame payload is incomplete"));
         }
-        Ok(Self {
-            header: FrameHeader {
-                magic,
-                version,
-                message_type,
-                flags,
-                request_id,
-                payload_len,
-            },
-            payload: buf[HEADER_LEN..total_len].to_vec(),
-        })
+        Self::from_parts(header, buf[HEADER_LEN..total_len].to_vec())
     }
 
     pub fn header(&self) -> &FrameHeader {
@@ -210,9 +221,49 @@ impl Frame {
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.payload
+    }
 }
 
 impl FrameHeader {
+    pub fn new(message_type: MessageType, request_id: u64, payload_len: u32) -> Self {
+        Self {
+            magic: MAGIC,
+            version: 1,
+            message_type,
+            flags: 0,
+            request_id,
+            payload_len,
+        }
+    }
+
+    pub fn decode_header_bytes(buf: &[u8]) -> RS<Self> {
+        if buf.len() < HEADER_LEN {
+            return Err(m_error!(EC::ParseErr, "frame header is incomplete"));
+        }
+        let magic = u16::from_be_bytes([buf[0], buf[1]]);
+        if magic != MAGIC {
+            return Err(m_error!(EC::ParseErr, "invalid frame magic"));
+        }
+        let version = u16::from_be_bytes([buf[2], buf[3]]);
+        let message_type = MessageType::try_from(u16::from_be_bytes([buf[4], buf[5]]))?;
+        let flags = u16::from_be_bytes([buf[6], buf[7]]);
+        let request_id = u64::from_be_bytes([
+            buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+        ]);
+        let payload_len = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+        Ok(Self {
+            magic,
+            version,
+            message_type,
+            flags,
+            request_id,
+            payload_len,
+        })
+    }
+
     pub fn magic(&self) -> u16 {
         self.magic
     }
@@ -241,9 +292,22 @@ impl FrameHeader {
 impl ClientRequest {
     pub fn new(app_name: impl Into<String>, sql: impl Into<String>) -> Self {
         Self {
+            oid: 0,
             app_name: app_name.into(),
             sql: sql.into(),
         }
+    }
+
+    pub fn new_with_oid(oid: u128, app_name: impl Into<String>, sql: impl Into<String>) -> Self {
+        Self {
+            oid,
+            app_name: app_name.into(),
+            sql: sql.into(),
+        }
+    }
+
+    pub fn oid(&self) -> u128 {
+        self.oid
     }
 
     pub fn app_name(&self) -> &str {
@@ -257,24 +321,24 @@ impl ClientRequest {
 
 impl ServerResponse {
     pub fn new(
-        columns: Vec<String>,
-        rows: Vec<Vec<String>>,
+        row_desc: TupleFieldDesc,
+        rows: Vec<TupleValue>,
         affected_rows: u64,
         error: Option<String>,
     ) -> Self {
         Self {
-            columns,
+            row_desc,
             rows,
             affected_rows,
             error,
         }
     }
 
-    pub fn columns(&self) -> &[String] {
-        &self.columns
+    pub fn row_desc(&self) -> &TupleFieldDesc {
+        &self.row_desc
     }
 
-    pub fn rows(&self) -> &[Vec<String>] {
+    pub fn rows(&self) -> &[TupleValue] {
         &self.rows
     }
 
@@ -502,8 +566,7 @@ pub fn encode_client_request_with_message_type(
     request_id: u64,
     request: &ClientRequest,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode client request error", e))?;
+    let payload = encode_payload(request, "encode client request error")?;
     Ok(Frame::new(message_type, request_id, payload).encode())
 }
 
@@ -512,70 +575,62 @@ pub fn encode_client_request(request_id: u64, request: &ClientRequest) -> RS<Vec
 }
 
 pub fn decode_client_request(frame: &Frame) -> RS<ClientRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode client request error", e))
+    decode_payload(frame.payload(), "decode client request error")
+}
+
+pub fn encode_batch_request(request_id: u64, request: &ClientRequest) -> RS<Vec<u8>> {
+    encode_client_request_with_message_type(MessageType::Batch, request_id, request)
 }
 
 pub fn encode_server_response(request_id: u64, response: &ServerResponse) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode server response error", e))?;
+    let payload = encode_payload(response, "encode server response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
 pub fn decode_server_response(frame: &Frame) -> RS<ServerResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode server response error", e))
+    decode_payload(frame.payload(), "decode server response error")
 }
 
 pub fn encode_get_request(request_id: u64, request: &GetRequest) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode get request error", e))?;
+    let payload = encode_payload(request, "encode get request error")?;
     Ok(Frame::new(MessageType::Get, request_id, payload).encode())
 }
 
 pub fn decode_get_request(frame: &Frame) -> RS<GetRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode get request error", e))
+    decode_payload(frame.payload(), "decode get request error")
 }
 
 pub fn decode_get_response(frame: &Frame) -> RS<GetResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode get response error", e))
+    decode_payload(frame.payload(), "decode get response error")
 }
 
 pub fn encode_put_request(request_id: u64, request: &PutRequest) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode put request error", e))?;
+    let payload = encode_payload(request, "encode put request error")?;
     Ok(Frame::new(MessageType::Put, request_id, payload).encode())
 }
 
 pub fn decode_put_request(frame: &Frame) -> RS<PutRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode put request error", e))
+    decode_payload(frame.payload(), "decode put request error")
 }
 
 pub fn decode_put_response(frame: &Frame) -> RS<PutResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode put response error", e))
+    decode_payload(frame.payload(), "decode put response error")
 }
 
 pub fn encode_range_scan_request(request_id: u64, request: &RangeScanRequest) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode range scan request error", e))?;
+    let payload = encode_payload(request, "encode range scan request error")?;
     Ok(Frame::new(MessageType::RangeScan, request_id, payload).encode())
 }
 
 pub fn decode_range_scan_request(frame: &Frame) -> RS<RangeScanRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode range scan request error", e))
+    decode_payload(frame.payload(), "decode range scan request error")
 }
 
 pub fn encode_procedure_invoke_request(
     request_id: u64,
     request: &ProcedureInvokeRequest,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode procedure invoke request error", e))?;
+    let payload = encode_payload(request, "encode procedure invoke request error")?;
     Ok(Frame::new(MessageType::ProcedureInvoke, request_id, payload).encode())
 }
 
@@ -583,60 +638,50 @@ pub fn encode_session_create_request(
     request_id: u64,
     request: &SessionCreateRequest,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode session create request error", e))?;
+    let payload = encode_payload(request, "encode session create request error")?;
     Ok(Frame::new(MessageType::SessionCreate, request_id, payload).encode())
 }
 
 pub fn encode_session_close_request(request_id: u64, request: &SessionCloseRequest) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(request)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode session close request error", e))?;
+    let payload = encode_payload(request, "encode session close request error")?;
     Ok(Frame::new(MessageType::SessionClose, request_id, payload).encode())
 }
 
 pub fn decode_range_scan_response(frame: &Frame) -> RS<RangeScanResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode range scan response error", e))
+    decode_payload(frame.payload(), "decode range scan response error")
 }
 
 pub fn decode_procedure_invoke_request(frame: &Frame) -> RS<ProcedureInvokeRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode procedure invoke request error", e))
+    decode_payload(frame.payload(), "decode procedure invoke request error")
 }
 
 pub fn decode_session_create_response(frame: &Frame) -> RS<SessionCreateResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode session create response error", e))
+    decode_payload(frame.payload(), "decode session create response error")
 }
 
 pub fn decode_session_create_request(frame: &Frame) -> RS<SessionCreateRequest> {
     if frame.payload().is_empty() {
         return Ok(SessionCreateRequest::default());
     }
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode session create request error", e))
+    decode_payload(frame.payload(), "decode session create request error")
 }
 
 pub fn decode_session_close_request(frame: &Frame) -> RS<SessionCloseRequest> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode session close request error", e))
+    decode_payload(frame.payload(), "decode session close request error")
 }
 
 pub fn encode_get_response(request_id: u64, response: &GetResponse) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode get response error", e))?;
+    let payload = encode_payload(response, "encode get response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
 pub fn encode_put_response(request_id: u64, response: &PutResponse) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode put response error", e))?;
+    let payload = encode_payload(response, "encode put response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
 pub fn encode_range_scan_response(request_id: u64, response: &RangeScanResponse) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode range scan response error", e))?;
+    let payload = encode_payload(response, "encode range scan response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
@@ -644,8 +689,7 @@ pub fn encode_procedure_invoke_response(
     request_id: u64,
     response: &ProcedureInvokeResponse,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode procedure invoke response error", e))?;
+    let payload = encode_payload(response, "encode procedure invoke response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
@@ -653,8 +697,7 @@ pub fn encode_session_create_response(
     request_id: u64,
     response: &SessionCreateResponse,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode session create response error", e))?;
+    let payload = encode_payload(response, "encode session create response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
@@ -662,30 +705,33 @@ pub fn encode_session_close_response(
     request_id: u64,
     response: &SessionCloseResponse,
 ) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|e| m_error!(EC::EncodeErr, "encode session close response error", e))?;
+    let payload = encode_payload(response, "encode session close response error")?;
     Ok(Frame::new(MessageType::Response, request_id, payload).encode())
 }
 
 pub fn decode_procedure_invoke_response(frame: &Frame) -> RS<ProcedureInvokeResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode procedure invoke response error", e))
+    decode_payload(frame.payload(), "decode procedure invoke response error")
 }
 
 pub fn decode_session_close_response(frame: &Frame) -> RS<SessionCloseResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode session close response error", e))
+    decode_payload(frame.payload(), "decode session close response error")
 }
 
 pub fn encode_error_response(request_id: u64, message: impl Into<String>) -> RS<Vec<u8>> {
-    let payload = serde_json::to_vec(&ErrorResponse::new(message))
-        .map_err(|e| m_error!(EC::EncodeErr, "encode error response error", e))?;
+    let payload = encode_payload(&ErrorResponse::new(message), "encode error response error")?;
     Ok(Frame::new(MessageType::Error, request_id, payload).encode())
 }
 
 pub fn decode_error_response(frame: &Frame) -> RS<ErrorResponse> {
-    serde_json::from_slice(frame.payload())
-        .map_err(|e| m_error!(EC::DecodeErr, "decode error response error", e))
+    decode_payload(frame.payload(), "decode error response error")
+}
+
+fn encode_payload<T: Serialize>(value: &T, err_msg: &'static str) -> RS<Vec<u8>> {
+    rmp_serde::to_vec(value).map_err(|e| m_error!(EC::EncodeErr, err_msg, e))
+}
+
+fn decode_payload<T: DeserializeOwned>(payload: &[u8], err_msg: &'static str) -> RS<T> {
+    rmp_serde::from_slice(payload).map_err(|e| m_error!(EC::DecodeErr, err_msg, e))
 }
 
 #[cfg(test)]
@@ -809,17 +855,27 @@ mod tests {
             b"input".to_vec()
         );
 
+        use crate::tuple::datum_desc::DatumDesc;
+        use crate::tuple::tuple_field_desc::TupleFieldDesc;
+        use crate::tuple::tuple_value::TupleValue;
+        use mudu_type::dat_type::DatType;
+        use mudu_type::dat_type_id::DatTypeID;
+        use mudu_type::dat_value::DatValue;
+
         let response = ServerResponse::new(
-            vec!["value".to_string()],
-            vec![vec!["1".to_string()]],
+            TupleFieldDesc::new(vec![DatumDesc::new(
+                "value".to_string(),
+                DatType::default_for(DatTypeID::String),
+            )]),
+            vec![TupleValue::from(vec![DatValue::from_string("1".to_string())])],
             0,
             None,
         );
         let response_frame =
             Frame::decode(&encode_server_response(12, &response).unwrap()).unwrap();
         let decoded_response = decode_server_response(&response_frame).unwrap();
-        assert_eq!(decoded_response.columns(), &["value".to_string()]);
-        assert_eq!(decoded_response.rows(), &[vec!["1".to_string()]]);
+        assert_eq!(decoded_response.row_desc().fields()[0].name(), "value");
+        assert_eq!(decoded_response.rows()[0].values()[0].expect_string(), "1");
 
         let get_response_frame = Frame::decode(
             &encode_get_response(13, &GetResponse::new(Some(b"v".to_vec()))).unwrap(),

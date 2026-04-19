@@ -295,6 +295,20 @@ pub fn mudu_command(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) ->
     })
 }
 
+pub fn mudu_batch(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    with_session(oid, |conn| {
+        conn.query_drop(sql_stmt.to_sql_string())
+            .map_err(|e| m_error!(EC::DBInternalError, "mysql batch error", e))?;
+        Ok(conn.affected_rows())
+    })
+}
+
 pub async fn mudu_command_async(
     oid: OID,
     sql_stmt: &dyn SQLStmt,
@@ -309,6 +323,27 @@ pub async fn mudu_command_async(
         .query_drop(sql_text)
         .await
         .map_err(|e| m_error!(EC::DBInternalError, "mysql command error", e))?;
+    Ok(session.conn.affected_rows())
+}
+
+pub async fn mudu_batch_async(
+    oid: OID,
+    sql_stmt: &dyn SQLStmt,
+    params: &dyn SQLParams,
+) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    let session = with_async_session(oid).await?;
+    let mut session = session.lock().await;
+    session
+        .conn
+        .query_drop(sql_stmt.to_sql_string())
+        .await
+        .map_err(|e| m_error!(EC::DBInternalError, "mysql batch error", e))?;
     Ok(session.conn.affected_rows())
 }
 

@@ -1,22 +1,34 @@
 use super::{
-    AsyncIoUringInvokeClientFactory, HttpApi, ServerTopology, TokioIoUringInvokeClientFactory,
-    WorkerTopology, find_app, parse_json_object_body, to_param,
+    find_app, parse_json_object_body, to_param, AsyncIoUringInvokeClientFactory, HttpApi,
+    PartitionRouteEntry, PartitionRouteRequest, PartitionRouteResponse, ServerTopology,
+    TokioIoUringInvokeClientFactory, WorkerTopology,
 };
 use crate::backend::app_mgr::AppMgr;
 use crate::backend::mududb_cfg::MuduDBCfg;
 use async_trait::async_trait;
 use mudu::common::result::RS;
+use mudu_kernel::contract::meta_mgr::MetaMgr;
 use mudu::utils::json::JsonValue;
 use mudu_binding::procedure::procedure_invoke;
 use mudu_contract::procedure::proc_desc::ProcDesc;
-use mudu_kernel::server_ur::worker_registry::WorkerRegistry;
+use mudu_kernel::mudu_conn::mudu_conn_async::{
+    set_default_remote_addr, set_default_remote_worker_id,
+};
+use mudu_kernel::meta::meta_mgr_factory::MetaMgrFactory;
+use mudu_kernel::server::partition_router::{
+    PartitionRouter, DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID,
+};
+use mudu_kernel::server::worker_registry::WorkerRegistry;
 use serde_json::Value;
+use std::ops::Bound;
 use std::sync::Arc;
 
 pub struct IoUringHttpApi {
     app_mgr: Arc<dyn AppMgr>,
     tcp_addr: String,
     worker_registry: Arc<WorkerRegistry>,
+    meta_mgr: Arc<dyn MetaMgr>,
+    partition_router: PartitionRouter,
     client_factory: Arc<dyn AsyncIoUringInvokeClientFactory>,
 }
 
@@ -30,6 +42,8 @@ impl IoUringHttpApi {
             app_mgr,
             format!("{}:{}", cfg.listen_ip, cfg.tcp_listen_port),
             worker_registry,
+            MetaMgrFactory::create(cfg.db_path.clone())
+                .unwrap_or_else(|e| panic!("create http meta manager failed: {e}")),
             Arc::new(TokioIoUringInvokeClientFactory),
         )
     }
@@ -38,14 +52,37 @@ impl IoUringHttpApi {
         app_mgr: Arc<dyn AppMgr>,
         tcp_addr: String,
         worker_registry: Arc<WorkerRegistry>,
+        meta_mgr: Arc<dyn MetaMgr>,
         client_factory: Arc<dyn AsyncIoUringInvokeClientFactory>,
     ) -> Self {
+        set_default_remote_addr(Some(tcp_addr.clone()));
+        set_default_remote_worker_id(worker_registry.default_global_worker_id());
         Self {
             app_mgr,
             tcp_addr,
             worker_registry,
+            partition_router: PartitionRouter::new(meta_mgr.clone()),
+            meta_mgr,
             client_factory,
         }
+    }
+
+    async fn resolve_partition_worker(&self, partition_id: mudu::common::id::OID) -> RS<mudu::common::id::OID> {
+        if let Some(worker_id) = self.meta_mgr.get_partition_worker(partition_id).await? {
+            return Ok(worker_id);
+        }
+        if partition_id == DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID {
+            return self.worker_registry.default_global_worker_id().ok_or_else(|| {
+                mudu::m_error!(
+                    mudu::error::ec::EC::NoSuchElement,
+                    "worker registry has no default global worker"
+                )
+            });
+        }
+        Err(mudu::m_error!(
+            mudu::error::ec::EC::NoSuchElement,
+            format!("no worker placement for partition {}", partition_id)
+        ))
     }
 }
 
@@ -123,6 +160,65 @@ impl HttpApi for IoUringHttpApi {
 
     async fn uninstall_app(&self, app_name: &str) -> RS<()> {
         self.app_mgr.uninstall(app_name.as_bytes().to_vec()).await
+    }
+
+    async fn route_partition(&self, request: PartitionRouteRequest) -> RS<PartitionRouteResponse> {
+        let rule = self
+            .meta_mgr
+            .get_partition_rule_by_name(&request.rule_name)
+            .await?
+            .ok_or_else(|| {
+                mudu::m_error!(
+                    mudu::error::ec::EC::NoSuchElement,
+                    format!("no such partition rule {}", request.rule_name)
+                )
+            })?;
+
+        let partition_ids = if let Some(key) = request.key {
+            if request.start.is_some() || request.end.is_some() {
+                return Err(mudu::m_error!(
+                    mudu::error::ec::EC::ParseErr,
+                    "partition route request cannot specify both key and range"
+                ));
+            }
+            vec![self
+                .partition_router
+                .route_rule_exact_partition(
+                    &rule,
+                    &key.into_iter().map(|value| value.into_bytes()).collect::<Vec<_>>(),
+                )?]
+        } else {
+            let start = match request.start {
+                Some(values) => Bound::Included(
+                    values
+                        .into_iter()
+                        .map(|value| value.into_bytes())
+                        .collect::<Vec<_>>(),
+                ),
+                None => Bound::Unbounded,
+            };
+            let end = match request.end {
+                Some(values) => Bound::Excluded(
+                    values
+                        .into_iter()
+                        .map(|value| value.into_bytes())
+                        .collect::<Vec<_>>(),
+                ),
+                None => Bound::Unbounded,
+            };
+            self.partition_router
+                .route_rule_range_partitions(&rule, &start, &end)?
+        };
+
+        let mut routes = Vec::with_capacity(partition_ids.len());
+        for partition_id in partition_ids {
+            let worker_id = self.resolve_partition_worker(partition_id).await?;
+            routes.push(PartitionRouteEntry {
+                partition_id,
+                worker_id,
+            });
+        }
+        Ok(PartitionRouteResponse { routes })
     }
 
     async fn invoke_json(

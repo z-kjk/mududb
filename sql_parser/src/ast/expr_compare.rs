@@ -47,14 +47,7 @@ impl ExprCompare {
 
     //
     fn revert_cmp_op(op: ValueCompare) -> ValueCompare {
-        match op {
-            ValueCompare::EQ => ValueCompare::EQ,
-            ValueCompare::LE => ValueCompare::GT,
-            ValueCompare::LT => ValueCompare::GE,
-            ValueCompare::GE => ValueCompare::LT,
-            ValueCompare::GT => ValueCompare::LE,
-            ValueCompare::NE => ValueCompare::NE,
-        }
+        ValueCompare::revert_cmp_op(op)
     }
 }
 
@@ -71,3 +64,41 @@ impl Debug for ExprCompare {
 }
 
 impl ASTNode for ExprCompare {}
+
+#[cfg(test)]
+mod tests {
+    use super::ExprCompare;
+    use crate::ast::expr_item::{ExprItem, ExprValue};
+    use crate::ast::expr_literal::ExprLiteral;
+    use crate::ast::expr_name::ExprName;
+    use crate::ast::expr_operator::ValueCompare;
+    use mudu_type::dat_typed::DatTyped;
+
+    fn field(name: &str) -> ExprItem {
+        let mut expr = ExprName::new();
+        expr.set_name(name.to_string());
+        ExprItem::ItemName(expr)
+    }
+
+    fn literal_i32(value: i32) -> ExprItem {
+        ExprItem::ItemValue(ExprValue::ValueLiteral(ExprLiteral::DatumLiteral(
+            DatTyped::from_i32(value),
+        )))
+    }
+
+    #[test]
+    fn expr_field_op_literal_reverts_literal_field_order() {
+        let cmp = ExprCompare::new(ValueCompare::GT, literal_i32(7), field("id"));
+        let (field, literal, op) = cmp.expr_field_op_literal().unwrap();
+
+        assert_eq!(field.name(), "id");
+        assert_eq!(literal.dat_type().dat_internal().to_i32(), 7);
+        assert!(matches!(op, ValueCompare::LE));
+    }
+
+    #[test]
+    fn expr_field_op_literal_rejects_non_literal_pairs() {
+        let cmp = ExprCompare::new(ValueCompare::EQ, field("lhs"), field("rhs"));
+        assert!(cmp.expr_field_op_literal().is_none());
+    }
+}

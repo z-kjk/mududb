@@ -23,6 +23,20 @@ impl DatTyped {
         )
     }
 
+    pub fn from_i128(val: i128) -> Self {
+        Self::new(
+            DatType::default_for(DatTypeID::I128),
+            DatValue::from_i128(val),
+        )
+    }
+
+    pub fn from_oid(val: u128) -> Self {
+        Self::new(
+            DatType::default_for(DatTypeID::U128),
+            DatValue::from_u128(val),
+        )
+    }
+
     pub fn from_f32(val: f32) -> Self {
         Self::new(
             DatType::default_for(DatTypeID::F32),

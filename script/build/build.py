@@ -376,7 +376,7 @@ class BuildScript:
         self.logger = Logger()
         self.platform_manager = PlatformManager()
         self.args = parse_args()
-        self.targets = ["wasm32-wasip1", "wasm32-wasip2"]
+        self.targets = ["wasm32-wasip2"]
         # Set default values
         self.build_mode = "release"
         self.toggle_clean_cache = self.args.clean

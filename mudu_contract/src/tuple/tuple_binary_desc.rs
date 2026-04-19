@@ -46,9 +46,8 @@ impl TupleBinaryDesc {
         }
         let offset_hdr = 0;
         let offset_slot_begin = offset_hdr;
-        let mut offset_slot_var =
-            (offset_slot_begin + total_fixed_size + var_count * Slot::size_of()) as u32;
-        let mut offset_data_fixed = offset_slot_begin as u32;
+        let mut offset_slot_var = offset_slot_begin as u32;
+        let mut offset_data_fixed = (offset_slot_begin + var_count * Slot::size_of()) as u32;
         let mut offset_len_data_fixed: Vec<FieldDesc> = vec![];
         let mut offset_len_slot_var: Vec<FieldDesc> = vec![];
         let mut slot_all: Vec<FieldDesc> = vec![];
@@ -63,10 +62,10 @@ impl TupleBinaryDesc {
                         offset_data_fixed += data_len;
                     }
                     None => {
-                        offset_slot_var += Slot::size_of() as u32;
                         let slot = Slot::new(offset_slot_var, Slot::size_of() as u32);
                         slot_all.push(FieldDesc::new(slot.clone(), ty.clone(), false));
                         offset_len_slot_var.push(FieldDesc::new(slot, ty.clone(), false));
+                        offset_slot_var += Slot::size_of() as u32;
                     }
                 },
                 Err(e) => {

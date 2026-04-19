@@ -2,10 +2,8 @@
 pub mod _arb_de_en;
 
 pub mod _debug;
-mod bc;
-pub mod bc_dec;
-pub mod bc_enc;
 pub mod buf;
+pub mod codec;
 pub mod crc;
 pub mod endian;
 pub mod expected;

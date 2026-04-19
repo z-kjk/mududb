@@ -16,7 +16,7 @@ pub fn build_tuple_into(
         return Ok(Err(tuple_desc.min_tuple_size()));
     }
     let mut offset = tuple_desc.meta_size();
-    assert!(offset < tuple.len());
+    assert!(offset <= tuple.len());
     for (i, v) in vec.iter().enumerate() {
         let field = tuple_desc.get_field_desc(i);
         let r = write_value::write_value_to_tuple(field, offset, v, tuple)?;
@@ -42,7 +42,7 @@ pub fn build_tuple(vec: &Vec<Buf>, tuple_desc: &TupleBinaryDesc) -> RS<TupleBina
         panic!("low buffer capacity");
     }
     let mut offset = tuple_desc.meta_size();
-    assert!(offset < tuple.len());
+    assert!(offset <= tuple.len());
     for (i, v) in vec.iter().enumerate() {
         let field = tuple_desc.get_field_desc(i);
         let size = loop {
@@ -59,4 +59,22 @@ pub fn build_tuple(vec: &Vec<Buf>, tuple_desc: &TupleBinaryDesc) -> RS<TupleBina
     }
     tuple.resize(offset, 0);
     Ok(tuple)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_tuple, build_tuple_into};
+    use crate::tuple::tuple_binary_desc::TupleBinaryDesc;
+
+    #[test]
+    fn zero_field_tuple_is_allowed() {
+        let desc = TupleBinaryDesc::from(Vec::new()).unwrap();
+
+        let tuple = build_tuple(&Vec::new(), &desc).unwrap();
+        assert!(tuple.is_empty());
+
+        let mut into_buf = Vec::new();
+        let result = build_tuple_into(&[], &desc, &mut into_buf).unwrap();
+        assert_eq!(result, Ok(0));
+    }
 }

@@ -103,11 +103,12 @@ fn fuzz_row_for_schema<'a>(
         return Ok(());
     }
     let key = loop {
-        let mut key = Vec::with_capacity(schema.key_columns().len());
+        let key_columns = schema.key_columns();
+        let mut key = Vec::with_capacity(key_columns.len());
         if u.len() == 0 {
             return Ok(());
         }
-        for c in schema.key_columns() {
+        for c in key_columns {
             let s = arb_string(c, u)?;
             key.push(s);
         }
@@ -115,8 +116,9 @@ fn fuzz_row_for_schema<'a>(
             break key;
         }
     };
-    let mut value = Vec::with_capacity(schema.value_columns().len());
-    for c in schema.value_columns() {
+    let value_columns = schema.value_columns();
+    let mut value = Vec::with_capacity(value_columns.len());
+    for c in value_columns {
         let s = arb_string(c, u)?;
         value.push(s);
     }

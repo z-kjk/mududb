@@ -69,3 +69,64 @@ pub fn kv_read_modify_write(xid: XID, user_key: String, append_value: String) ->
     mudu_put(xid, key.as_bytes(), current.as_bytes())?;
     Ok(current)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{kv_insert, kv_read, kv_read_modify_write, kv_scan, kv_update};
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use sys_interface::sync_api::{mudu_close, mudu_open};
+
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("key_value_{name}_{suffix}.db"))
+    }
+
+    #[test]
+    fn key_value_procedures_roundtrip_against_standalone_adapter() {
+        let _guard = test_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let db_path = temp_db_path("roundtrip");
+        mudu_adapter::config::reset_db_path_override_for_test();
+        mudu_adapter::syscall::set_db_path(&db_path);
+
+        let xid = mudu_open().unwrap();
+        kv_insert(xid, "a".to_string(), "1".to_string()).unwrap();
+        kv_insert(xid, "b".to_string(), "2".to_string()).unwrap();
+
+        assert_eq!(kv_read(xid, "a".to_string()).unwrap(), "1");
+
+        kv_update(xid, "a".to_string(), "3".to_string()).unwrap();
+        assert_eq!(kv_read(xid, "a".to_string()).unwrap(), "3");
+
+        let rows = kv_scan(xid, "a".to_string(), "z".to_string()).unwrap();
+        assert_eq!(rows, vec!["user/a=3".to_string(), "user/b=2".to_string()]);
+
+        let updated = kv_read_modify_write(xid, "a".to_string(), "-tail".to_string()).unwrap();
+        assert_eq!(updated, "3-tail");
+        assert_eq!(kv_read(xid, "a".to_string()).unwrap(), "3-tail");
+
+        mudu_close(xid).unwrap();
+    }
+
+    #[test]
+    fn kv_update_requires_existing_key() {
+        let _guard = test_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let db_path = temp_db_path("missing");
+        mudu_adapter::config::reset_db_path_override_for_test();
+        mudu_adapter::syscall::set_db_path(&db_path);
+
+        let xid = mudu_open().unwrap();
+        let err = kv_update(xid, "missing".to_string(), "x".to_string()).unwrap_err();
+        assert!(err.message().contains("missing"));
+        mudu_close(xid).unwrap();
+    }
+}

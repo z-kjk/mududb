@@ -6,6 +6,17 @@ use crate::dt_fn_arbitrary::FnArbitrary;
 use crate::dtp_array::DTPArray;
 use arbitrary::{Arbitrary, Unstructured};
 
+const ARRAY_INNER_TYPE_IDS: [DatTypeID; 8] = [
+    DatTypeID::I32,
+    DatTypeID::I64,
+    DatTypeID::F32,
+    DatTypeID::F64,
+    DatTypeID::String,
+    DatTypeID::U128,
+    DatTypeID::I128,
+    DatTypeID::Binary,
+];
+
 pub fn fn_array_arb_object(
     u: &mut Unstructured,
     dat_type: &DatType,
@@ -31,9 +42,14 @@ pub fn fn_array_arb_printable(
 }
 
 pub fn fn_array_arb_dt_param(u: &mut Unstructured) -> arbitrary::Result<DatType> {
-    let n = u8::arbitrary(u)? as u32;
-    let dat_type_id = DatTypeID::from_u32(n);
-    let param = DTPArray::new(DatType::default_for(dat_type_id));
+    let n = (u8::arbitrary(u)? as usize) % ARRAY_INNER_TYPE_IDS.len();
+    let dat_type_id = ARRAY_INNER_TYPE_IDS[n];
+    let inner_type = if dat_type_id.has_param() {
+        dat_type_id.fn_arb_param()(u)?
+    } else {
+        DatType::default_for(dat_type_id)
+    };
+    let param = DTPArray::new(inner_type);
     let dat_type = DatType::from_array(param);
     Ok(dat_type)
 }

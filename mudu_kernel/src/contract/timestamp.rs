@@ -1,7 +1,6 @@
 #[cfg(any(test, feature = "test"))]
 use arbitrary::Arbitrary;
-use mudu::common::bc_dec::{DecErr, Decode, Decoder};
-use mudu::common::bc_enc::{EncErr, Encode, Encoder};
+use mudu::common::codec::{DecErr, Decode, Decoder, EncErr, Encode, Encoder};
 
 #[cfg_attr(any(test, feature = "test"), derive(Arbitrary))]
 #[derive(Clone, Debug, Eq, PartialEq)]

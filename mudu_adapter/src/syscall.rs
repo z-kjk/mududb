@@ -117,11 +117,7 @@ pub async fn mudu_command_async(
     backend::mudu_command_async(oid, sql_stmt, params).await
 }
 
-pub async fn mudu_batch_async(
-    oid: OID,
-    sql_stmt: &dyn SQLStmt,
-    params: &dyn SQLParams,
-) -> RS<u64> {
+pub async fn mudu_batch_async(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
     let _trace = mudu_utils::task_trace!();
     backend::mudu_batch_async(oid, sql_stmt, params).await
 }

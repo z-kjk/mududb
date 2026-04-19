@@ -385,4 +385,40 @@ pub mod object {
             OPTION_TEXT
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Options;
+        use mudu_contract::database::entity::Entity;
+        use mudu_type::datum::{Datum, DatumDyn};
+
+        #[test]
+        fn options_roundtrip_value_binary_and_textual() {
+            let option = Options::new(
+                Some("opt-1".to_string()),
+                Some("vote-1".to_string()),
+                Some("Alpha".to_string()),
+            );
+
+            let value = option.to_value(Options::dat_type()).unwrap();
+            let from_value = Options::from_value(&value).unwrap();
+            assert_eq!(from_value.get_option_id().as_deref(), Some("opt-1"));
+            assert_eq!(from_value.get_vote_id().as_deref(), Some("vote-1"));
+            assert_eq!(from_value.get_option_text().as_deref(), Some("Alpha"));
+
+            let binary = option.to_binary(Options::dat_type()).unwrap();
+            let from_binary = Options::from_binary(binary.as_ref()).unwrap();
+            assert_eq!(from_binary.get_option_text().as_deref(), Some("Alpha"));
+
+            let textual = option.to_textual(Options::dat_type()).unwrap();
+            let from_textual = Options::from_textual(textual.as_ref()).unwrap();
+            assert_eq!(from_textual.get_vote_id().as_deref(), Some("vote-1"));
+
+            let mut updated = Options::new_empty();
+            updated.set_field_value("option_id", mudu_type::dat_value::DatValue::from_string("opt-2".to_string())).unwrap();
+            updated.set_field_value("vote_id", mudu_type::dat_value::DatValue::from_string("vote-2".to_string())).unwrap();
+            updated.set_field_value("option_text", mudu_type::dat_value::DatValue::from_string("Beta".to_string())).unwrap();
+            assert_eq!(updated.get_option_text().as_deref(), Some("Beta"));
+        }
+    }
 }

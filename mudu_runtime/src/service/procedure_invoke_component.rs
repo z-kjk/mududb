@@ -8,9 +8,8 @@ use mudu::utils::case_convert::to_kebab_case;
 use mudu_binding::procedure::procedure_invoke;
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 use std::sync::Mutex;
-use std::thread;
 use wasmtime::Store;
 use wasmtime::component::{InstancePre, TypedFunc};
 
@@ -83,10 +82,10 @@ impl ProcedureInvokeComponent {
         let inner: ProcedureInvokeInner = inner
             .into_inner()
             .map_err(|e| m_error!(EC::MuduError, "mutex into inner error", e))?;
-        let thread = thread::spawn(move || {
+        let thread = mudu_sys::task::spawn_thread(move || {
             let ret = inner.invoke(param);
             ret
-        });
+        })?;
         let result = thread
             .join()
             .map_err(|_e| m_error!(EC::MuduError, "invoke thread join error"))?;

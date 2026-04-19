@@ -61,3 +61,55 @@ pub fn write_json<S: Serialize, P: AsRef<Path>>(object: &S, path: P) -> RS<()> {
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        from_json_str, from_json_value, read_json, to_json_str, to_json_value, write_json,
+        JsonValue,
+    };
+    use serde::{Deserialize, Serialize};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct DemoJson {
+        id: u32,
+        name: String,
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mudu_json_{name}_{suffix}.json"))
+    }
+
+    #[test]
+    fn json_string_value_and_file_roundtrip() {
+        let value = DemoJson {
+            id: 9,
+            name: "neo".to_string(),
+        };
+
+        let json = to_json_str(&value).unwrap();
+        assert!(json.contains("\"name\""));
+        let decoded: DemoJson = from_json_str(&json).unwrap();
+        assert_eq!(decoded, value);
+
+        let json_value = to_json_value(&value).unwrap();
+        let decoded_from_value: DemoJson = from_json_value(json_value).unwrap();
+        assert_eq!(decoded_from_value, value);
+
+        let path = temp_path("roundtrip");
+        write_json(&value, &path).unwrap();
+        let loaded: DemoJson = read_json(&path).unwrap();
+        assert_eq!(loaded, value);
+    }
+
+    #[test]
+    fn json_decode_rejects_wrong_shape() {
+        let err = from_json_value::<DemoJson>(JsonValue::String("oops".to_string())).unwrap_err();
+        assert!(err.to_string().contains("DecodeErr"));
+    }
+}

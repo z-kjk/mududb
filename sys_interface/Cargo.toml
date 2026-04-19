@@ -8,7 +8,6 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = ["component-model"]
-wasip1 = []
 wasip2 = ["component-model"]
 component-model = []
 async = []
@@ -24,3 +23,8 @@ mudu_adapter = { workspace = true, optional = true }
 uniffi = { workspace = true, features = ["tokio"], optional = true }
 thiserror = { version = "2.0.17", optional = true }
 tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+mudu_adapter = { workspace = true }
+mudu_type = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

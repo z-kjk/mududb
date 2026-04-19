@@ -106,11 +106,14 @@ impl RustType {
             RustType::Primitive(s) => match s.as_str() {
                 "i32" => DatType::default_for(DatTypeID::I32),
                 "i64" => DatType::default_for(DatTypeID::I64),
+                "i128" => DatType::default_for(DatTypeID::I128),
+                "u128" => DatType::default_for(DatTypeID::U128),
                 "f32" => DatType::default_for(DatTypeID::F32),
                 "f64" => DatType::default_for(DatTypeID::F64),
                 _ => return Err(m_error!(EC::TypeErr, format!("not support type {}", s))),
             },
             RustType::Custom(s) => match s.as_str() {
+                "OID" => DatType::default_for(DatTypeID::U128),
                 "String" => DatType::default_for(DatTypeID::String),
                 _ => {
                     let ty = custom_types.types.get(s).map_or_else(

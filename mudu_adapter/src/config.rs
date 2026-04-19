@@ -35,6 +35,13 @@ pub fn set_db_path(path: impl Into<PathBuf>) {
     *lock.write().expect("db path lock poisoned") = Some(path.into());
 }
 
+#[doc(hidden)]
+pub fn reset_db_path_override_for_test() {
+    if let Some(lock) = DB_PATH_OVERRIDE.get() {
+        *lock.write().expect("db path lock poisoned") = None;
+    }
+}
+
 pub fn db_path() -> PathBuf {
     if let Some(lock) = DB_PATH_OVERRIDE.get() {
         if let Some(path) = lock.read().expect("db path lock poisoned").clone() {

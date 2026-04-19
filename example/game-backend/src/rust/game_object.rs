@@ -1,4 +1,4 @@
 #[derive(Clone)]
 pub struct GameObject {
-    pub id : u64,
+    pub id: u64,
 }

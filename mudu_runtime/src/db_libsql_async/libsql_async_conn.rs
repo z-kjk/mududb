@@ -21,14 +21,14 @@ pub async fn create_libsql_async_conn(db_path: &String, app_name: &String) -> RS
 }
 
 pub struct LibSQLAsyncConn {
-    turso: Arc<Mutex<LibSQLAsyncConnInner>>,
+    inner: Arc<Mutex<LibSQLAsyncConnInner>>,
 }
 
 impl LibSQLAsyncConn {
     async fn new(db_path: String) -> RS<LibSQLAsyncConn> {
         let conn = LibSQLAsyncConnInner::new(db_path).await?;
         Ok(Self {
-            turso: Arc::new(Mutex::new(conn)),
+            inner: Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -36,7 +36,7 @@ impl LibSQLAsyncConn {
     where
         F: AsyncFnOnce(MutexGuard<LibSQLAsyncConnInner>) -> RS<R>,
     {
-        let guard = self.turso.lock().await;
+        let guard = self.inner.lock().await;
         f(guard).await
     }
 }

@@ -1,14 +1,17 @@
 use crate::client::async_client::{AsyncClient, AsyncClientImpl};
 use base64::Engine;
-use mudu_binding::universal::uni_dat_value::UniDatValue;
-use mudu_binding::universal::uni_oid::UniOid;
-use mudu_binding::universal::uni_primitive_value::UniPrimitiveValue;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
+use mudu_binding::universal::uni_dat_value::UniDatValue;
+use mudu_binding::universal::uni_oid::UniOid;
+use mudu_binding::universal::uni_primitive_value::UniPrimitiveValue;
 use mudu_contract::protocol::{
     ClientRequest, GetRequest, KeyValue, ProcedureInvokeRequest, PutRequest, RangeScanRequest,
+    ServerResponse,
 };
+use mudu_type::dat_type_id::DatTypeID;
+use mudu_type::datum::DatumDyn;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use serde_json::{Value, json};
@@ -46,8 +49,7 @@ where
         } else {
             self.inner.query(client_request).await?
         };
-        serde_json::to_value(response)
-            .map_err(|e| m_error!(EC::EncodeErr, "encode json command response error", e))
+        server_response_to_json(&response)
     }
 
     pub async fn put(&mut self, request: Value) -> RS<Value> {
@@ -181,21 +183,29 @@ fn json_value_to_uni_dat_value(value: Value) -> RS<UniDatValue> {
             serde_json::to_vec(&Value::Null)
                 .map_err(|e| m_error!(EC::EncodeErr, "encode null payload error", e))?,
         )),
-        Value::Bool(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_bool(inner))),
+        Value::Bool(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_bool(
+            inner,
+        ))),
         Value::Number(inner) => {
             if let Some(value) = inner.as_i64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_i64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_i64(
+                    value,
+                )))
             } else if let Some(value) = inner.as_u64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_u64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_u64(
+                    value,
+                )))
             } else if let Some(value) = inner.as_f64() {
-                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_f64(value)))
+                Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_f64(
+                    value,
+                )))
             } else {
                 Err(m_error!(EC::DecodeErr, "unsupported numeric json payload"))
             }
         }
-        Value::String(inner) => Ok(UniDatValue::from_primitive(
-            UniPrimitiveValue::from_string(inner),
-        )),
+        Value::String(inner) => Ok(UniDatValue::from_primitive(UniPrimitiveValue::from_string(
+            inner,
+        ))),
         Value::Array(inner) => inner
             .into_iter()
             .map(json_value_to_uni_dat_value)
@@ -240,7 +250,9 @@ fn uni_dat_value_to_json_value(value: UniDatValue) -> RS<Value> {
             UniPrimitiveValue::U32(v) => Ok(json!(v)),
             UniPrimitiveValue::I32(v) => Ok(json!(v)),
             UniPrimitiveValue::U64(v) => Ok(json!(v)),
+            UniPrimitiveValue::U128(v) => Ok(Value::String(v.to_string())),
             UniPrimitiveValue::I64(v) => Ok(json!(v)),
+            UniPrimitiveValue::I128(v) => Ok(Value::String(v.to_string())),
             UniPrimitiveValue::F32(v) => Ok(json!(v)),
             UniPrimitiveValue::F64(v) => Ok(json!(v)),
             UniPrimitiveValue::Char(v) => Ok(json!(v.to_string())),
@@ -292,6 +304,44 @@ fn key_value_to_json(key_value: KeyValue) -> RS<Value> {
     }))
 }
 
+fn server_response_to_json(response: &ServerResponse) -> RS<Value> {
+    let columns = response
+        .row_desc()
+        .fields()
+        .iter()
+        .map(|field| Value::String(field.name().to_string()))
+        .collect::<Vec<_>>();
+
+    let rows = response
+        .rows()
+        .iter()
+        .map(|row| {
+            let values = row
+                .values()
+                .iter()
+                .zip(response.row_desc().fields().iter())
+                .map(|(value, field_desc)| {
+                    if field_desc.dat_type().dat_type_id() == DatTypeID::String {
+                        Ok(Value::String(value.expect_string().clone()))
+                    } else {
+                        value
+                            .to_textual(field_desc.dat_type())
+                            .map(|text| Value::String(text.into()))
+                    }
+                })
+                .collect::<RS<Vec<_>>>()?;
+            Ok(Value::Array(values))
+        })
+        .collect::<RS<Vec<_>>>()?;
+
+    Ok(json!({
+        "columns": columns,
+        "rows": rows,
+        "affected_rows": response.affected_rows(),
+        "error": response.error(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,13 +349,20 @@ mod tests {
     use async_trait::async_trait;
     use mudu_contract::protocol::{
         GetResponse, KeyValue, ProcedureInvokeResponse, PutResponse, RangeScanResponse,
-        ServerResponse,
-        SessionCloseRequest, SessionCloseResponse, SessionCreateRequest, SessionCreateResponse,
+        ServerResponse, SessionCloseRequest, SessionCloseResponse, SessionCreateRequest,
+        SessionCreateResponse,
     };
+    use mudu_contract::tuple::datum_desc::DatumDesc;
+    use mudu_contract::tuple::tuple_field_desc::TupleFieldDesc;
+    use mudu_contract::tuple::tuple_value::TupleValue;
+    use mudu_type::dat_type::DatType;
+    use mudu_type::dat_type_id::DatTypeID;
+    use mudu_type::dat_value::DatValue;
 
     struct MockAsyncIoUringTcpClient {
         last_query: Option<ClientRequest>,
         last_execute: Option<ClientRequest>,
+        last_batch: Option<ClientRequest>,
         last_get: Option<GetRequest>,
         last_put: Option<PutRequest>,
         last_range: Option<RangeScanRequest>,
@@ -317,6 +374,7 @@ mod tests {
             Self {
                 last_query: None,
                 last_execute: None,
+                last_batch: None,
                 last_get: None,
                 last_put: None,
                 last_range: None,
@@ -330,8 +388,11 @@ mod tests {
         async fn query(&mut self, request: ClientRequest) -> RS<ServerResponse> {
             self.last_query = Some(request);
             Ok(ServerResponse::new(
-                vec!["value".to_string()],
-                vec![vec!["1".to_string()]],
+                TupleFieldDesc::new(vec![DatumDesc::new(
+                    "value".to_string(),
+                    DatType::default_for(DatTypeID::String),
+                )]),
+                vec![TupleValue::from(vec![DatValue::from_string("1".to_string())])],
                 0,
                 None,
             ))
@@ -339,7 +400,12 @@ mod tests {
 
         async fn execute(&mut self, request: ClientRequest) -> RS<ServerResponse> {
             self.last_execute = Some(request);
-            Ok(ServerResponse::new(vec![], vec![], 2, None))
+            Ok(ServerResponse::new(TupleFieldDesc::new(vec![]), vec![], 2, None))
+        }
+
+        async fn batch(&mut self, request: ClientRequest) -> RS<ServerResponse> {
+            self.last_batch = Some(request);
+            Ok(ServerResponse::new(TupleFieldDesc::new(vec![]), vec![], 3, None))
         }
 
         async fn get(&mut self, request: GetRequest) -> RS<GetResponse> {

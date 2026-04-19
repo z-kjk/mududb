@@ -120,8 +120,13 @@ pub async fn mudu_command(oid: OID, sql: &dyn SQLStmt, params: &dyn SQLParams) -
 
 ### 3. `batch`
 
-`batch` executes a batch SQL string through the batch syscall path. It currently targets libsql-backed runtime
-sessions and reuses the same serialized argument and return format as `command`.
+`batch` executes a batch SQL string through the batch syscall path. In the current host implementation, it is available for the SQLite, PostgreSQL, and MySQL standalone adapter paths, and reuses the same serialized argument and return format as `command`.
+
+Current limitations:
+
+- `batch` does not support SQL parameters
+- the `mudud` adapter path still returns `NotImplemented`
+- portable examples should still prefer executing schema setup statement-by-statement through `command` when they need to run unchanged across all adapters
 
 <!--
 quote_begin

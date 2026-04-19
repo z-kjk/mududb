@@ -1,6 +1,9 @@
 use crate::client::async_client::{AsyncClient, AsyncClientImpl};
-use crate::management::fetch_server_topology;
+use crate::management::{
+    fetch_server_topology, is_server_topology_unsupported, route_partition,
+};
 use base64::Engine;
+use mudu::common::serde_utils;
 use mudu_contract::protocol::{
     ClientRequest, GetRequest, ProcedureInvokeRequest, PutRequest, RangeScanRequest,
     SessionCloseRequest, SessionCreateRequest,
@@ -18,14 +21,14 @@ pub enum MuduCliBindingError {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
-pub struct MuduRow {
-    pub values: Vec<String>,
+pub struct MuduTupleRowBinding {
+    pub tuple_value_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MuduServerResponseBinding {
-    pub columns: Vec<String>,
-    pub rows: Vec<MuduRow>,
+    pub row_desc_bytes: Vec<u8>,
+    pub rows: Vec<MuduTupleRowBinding>,
     pub affected_rows: u64,
     pub error: Option<String>,
 }
@@ -47,6 +50,17 @@ pub struct WorkerTopologyBinding {
 pub struct ServerTopologyBinding {
     pub worker_count: u64,
     pub workers: Vec<WorkerTopologyBinding>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PartitionRouteEntryBinding {
+    pub partition_id: String,
+    pub worker_id: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PartitionRouteResponseBinding {
+    pub routes: Vec<PartitionRouteEntryBinding>,
 }
 
 #[derive(uniffi::Object)]
@@ -199,22 +213,19 @@ pub fn fetch_server_topology_binding(
     let topology = runtime
         .block_on(fetch_server_topology(&http_addr))
         .map_err(MuduCliBindingError::Message)?;
-    Ok(ServerTopologyBinding {
-        worker_count: topology.worker_count as u64,
-        workers: topology
-            .workers
-            .into_iter()
-            .map(|worker| WorkerTopologyBinding {
-                worker_index: worker.worker_index as u64,
-                worker_id: worker.worker_id.to_string(),
-                partitions: worker
-                    .partitions
-                    .into_iter()
-                    .map(|partition| partition.to_string())
-                    .collect(),
-            })
-            .collect(),
-    })
+    Ok(to_server_topology_binding(topology))
+}
+
+#[uniffi::export]
+pub fn try_fetch_server_topology_binding(
+    http_addr: String,
+) -> Result<Option<ServerTopologyBinding>, MuduCliBindingError> {
+    let runtime = new_runtime()?;
+    match runtime.block_on(fetch_server_topology(&http_addr)) {
+        Ok(topology) => Ok(Some(to_server_topology_binding(topology))),
+        Err(err) if is_server_topology_unsupported(&err) => Ok(None),
+        Err(err) => Err(MuduCliBindingError::Message(err)),
+    }
 }
 
 #[uniffi::export]
@@ -230,17 +241,71 @@ pub fn install_app_package(
     Ok(true)
 }
 
+#[uniffi::export]
+pub fn route_partition_binding(
+    http_addr: String,
+    rule_name: String,
+    key: Option<Vec<String>>,
+    start: Option<Vec<String>>,
+    end: Option<Vec<String>>,
+) -> Result<PartitionRouteResponseBinding, MuduCliBindingError> {
+    let runtime = new_runtime()?;
+    let response = runtime
+        .block_on(route_partition(&http_addr, &rule_name, key, start, end))
+        .map_err(MuduCliBindingError::Message)?;
+    Ok(to_partition_route_response_binding(response))
+}
+
 fn convert_server_response(response: mudu_contract::protocol::ServerResponse) -> MuduServerResponseBinding {
+    let row_desc_bytes = serde_utils::serialize_sized_to_vec(response.row_desc())
+        .unwrap_or_default();
     MuduServerResponseBinding {
-        columns: response.columns().to_vec(),
+        row_desc_bytes,
         rows: response
             .rows()
             .iter()
-            .cloned()
-            .map(|values| MuduRow { values })
+            .map(|row| MuduTupleRowBinding {
+                tuple_value_bytes: serde_utils::serialize_sized_to_vec(row).unwrap_or_default(),
+            })
             .collect(),
         affected_rows: response.affected_rows(),
         error: response.error().map(|value| value.to_string()),
+    }
+}
+
+fn to_server_topology_binding(
+    topology: crate::management::ServerTopology,
+) -> ServerTopologyBinding {
+    ServerTopologyBinding {
+        worker_count: topology.worker_count as u64,
+        workers: topology
+            .workers
+            .into_iter()
+            .map(|worker| WorkerTopologyBinding {
+                worker_index: worker.worker_index as u64,
+                worker_id: worker.worker_id.to_string(),
+                partitions: worker
+                    .partitions
+                    .into_iter()
+                    .map(|partition| partition.to_string())
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn to_partition_route_response_binding(
+    response: crate::management::PartitionRouteResponse,
+) -> PartitionRouteResponseBinding {
+    PartitionRouteResponseBinding {
+        routes: response
+            .routes
+            .into_iter()
+            .map(|route| PartitionRouteEntryBinding {
+                partition_id: route.partition_id.to_string(),
+                worker_id: route.worker_id.to_string(),
+            })
+            .collect(),
     }
 }
 

@@ -1,6 +1,6 @@
 #[cfg(any(test, feature = "test"))]
 use arbitrary::{Arbitrary, Unstructured};
-use mudu::common::id::{gen_oid, OID};
+use mudu::common::id::{gen_oid, AttrIndex, OID};
 use mudu_type::dat_type_id::DatTypeID as TypeID;
 use mudu_type::dt_info::DTInfo;
 use serde::{Deserialize, Serialize};
@@ -11,8 +11,8 @@ pub struct SchemaColumn {
     name: String,
     type_id: TypeID,
     type_param: DTInfo,
-    index: u32,
-    is_primary: bool,
+    index: AttrIndex,
+    is_primary: Option<AttrIndex>,
 }
 
 impl SchemaColumn {
@@ -24,7 +24,19 @@ impl SchemaColumn {
             type_param: type_param.clone(),
 
             index: 0,
-            is_primary: false,
+            is_primary: None,
+        }
+    }
+
+    pub fn new_with_oid(oid: OID, name: String, data_type: TypeID, type_param: DTInfo) -> Self {
+        Self {
+            oid,
+            name,
+            type_id: data_type,
+            type_param: type_param.clone(),
+
+            index: 0,
+            is_primary: None,
         }
     }
 
@@ -37,18 +49,22 @@ impl SchemaColumn {
     }
 
     pub fn is_primary(&self) -> bool {
+        self.is_primary.is_some()
+    }
+
+    pub fn primary_index(&self) -> Option<AttrIndex> {
         self.is_primary
     }
 
-    pub fn set_primary(&mut self, is_primary: bool) {
-        self.is_primary = is_primary;
+    pub fn set_primary_index(&mut self, index: Option<AttrIndex>) {
+        self.is_primary = index;
     }
 
-    pub fn get_index(&self) -> u32 {
+    pub fn get_index(&self) -> AttrIndex {
         self.index
     }
 
-    pub fn set_index(&mut self, index: u32) {
+    pub fn set_index(&mut self, index: AttrIndex) {
         self.index = index;
     }
 

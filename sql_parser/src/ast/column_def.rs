@@ -1,3 +1,4 @@
+use mudu::common::id::AttrIndex;
 use mudu_binding::universal::uni_dat_type::UniDatType;
 use mudu_binding::universal::uni_dat_value::UniDatValue;
 
@@ -6,8 +7,8 @@ pub struct ColumnDef {
     column_name: String,
     data_type_def: UniDatType,
     data_type_param: Option<Vec<UniDatValue>>,
-    is_primary_key: bool,
-    index: u32,
+    opt_primary_key_index: Option<AttrIndex>,
+    index: AttrIndex,
 }
 
 impl ColumnDef {
@@ -15,14 +16,13 @@ impl ColumnDef {
         column_name: String,
         data_type_def: UniDatType,
         data_type_param: Option<Vec<UniDatValue>>,
-        is_primary_key: bool,
     ) -> Self {
         Self {
             column_name,
             data_type_def,
             data_type_param,
-            is_primary_key,
-            index: u32::MAX,
+            opt_primary_key_index: None,
+            index: AttrIndex::MAX,
         }
     }
 
@@ -35,23 +35,31 @@ impl ColumnDef {
     }
 
     pub fn is_primary_key(&self) -> bool {
-        self.is_primary_key
+        self.opt_primary_key_index.is_some()
     }
 
     pub fn column_name(&self) -> &String {
         &self.column_name
     }
 
-    pub fn set_primary_key(&mut self, is_primary: bool) {
-        self.is_primary_key = is_primary;
+    pub fn primary_key_index(&self) -> Option<AttrIndex> {
+        self.opt_primary_key_index
     }
 
-    pub fn set_index(&mut self, index: u32) {
+    pub fn expect_primary_key_index(&self) -> AttrIndex {
+        self.opt_primary_key_index.unwrap()
+    }
+
+    pub fn set_primary_key_index(&mut self, index: Option<AttrIndex>) {
+        self.opt_primary_key_index = index;
+    }
+
+    pub fn set_index(&mut self, index: AttrIndex) {
         self.index = index;
     }
 
     // column index in table schema
-    pub fn column_index(&self) -> u32 {
+    pub fn column_index(&self) -> AttrIndex {
         self.index
     }
 }

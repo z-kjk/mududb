@@ -67,7 +67,7 @@ cargo run -p ycsb --features benchmark-runner --bin ycsb-benchmark -- \
 Example with mudud TCP:
 
 ```bash
-export MUDU_CONNECTION="mudud://127.0.0.1:9000/ycsb?http_addr=127.0.0.1:8300"
+export MUDU_CONNECTION="mudud://127.0.0.1:9527/ycsb?http_addr=127.0.0.1:8300"
 cargo run -p ycsb --features benchmark-runner --bin ycsb-benchmark -- \
   --workload f \
   --enable-async \

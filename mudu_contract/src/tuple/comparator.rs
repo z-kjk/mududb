@@ -11,6 +11,51 @@ use mudu_type::dat_type::DatType;
 use mudu_type::dat_type_id::DatTypeID;
 use mudu_type::dat_value::DatValue;
 
+#[derive(Clone, Copy)]
+pub struct TupleComparator {
+    pub compare: fn(&[u8], &[u8], &TupleBinaryDesc) -> RS<Ordering>,
+    pub equal: fn(&[u8], &[u8], &TupleBinaryDesc) -> RS<bool>,
+    pub hash_cal_one: fn(&[u8], &TupleBinaryDesc, &mut dyn Hasher) -> RS<()>,
+    pub hash_cal_finish: fn(&[u8], &TupleBinaryDesc, &mut dyn Hasher) -> RS<u64>,
+}
+
+impl TupleComparator {
+    pub fn new() -> Self {
+        Self {
+            compare: tuple_compare_adapter,
+            equal: tuple_equal_adapter,
+            hash_cal_one: tuple_hash_adapter,
+            hash_cal_finish: tuple_hash_finish_adapter,
+        }
+    }
+}
+
+impl Default for TupleComparator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn tuple_compare_adapter(tuple1: &[u8], tuple2: &[u8], desc: &TupleBinaryDesc) -> RS<Ordering> {
+    tuple_compare(desc, tuple1, tuple2)
+}
+
+fn tuple_equal_adapter(tuple1: &[u8], tuple2: &[u8], desc: &TupleBinaryDesc) -> RS<bool> {
+    tuple_equal(desc, tuple1, tuple2)
+}
+
+fn tuple_hash_adapter(tuple: &[u8], desc: &TupleBinaryDesc, hasher: &mut dyn Hasher) -> RS<()> {
+    tuple_hash(desc, tuple, hasher)
+}
+
+fn tuple_hash_finish_adapter(
+    tuple: &[u8],
+    desc: &TupleBinaryDesc,
+    hasher: &mut dyn Hasher,
+) -> RS<u64> {
+    tuple_hash_finish(desc, tuple, hasher)
+}
+
 pub fn tuple_compare(desc: &TupleBinaryDesc, tuple1: &[u8], tuple2: &[u8]) -> RS<Ordering> {
     _iter_value(
         desc,

@@ -28,7 +28,7 @@ use crate::service::app_inst::AppInst;
 use crate::service::runtime::Runtime;
 use actix_cors::Cors;
 use actix_web::http::StatusCode;
-use actix_web::{App, HttpResponse, HttpServer, Responder, delete, get, post, web};
+use actix_web::{delete, get, post, web, App, HttpResponse, HttpServer, Responder};
 use async_trait::async_trait;
 use base64::Engine;
 use mudu::common::id::OID;
@@ -102,6 +102,28 @@ pub struct ServerTopology {
     pub workers: Vec<WorkerTopology>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartitionRouteRequest {
+    pub rule_name: String,
+    #[serde(default)]
+    pub key: Option<Vec<String>>,
+    #[serde(default)]
+    pub start: Option<Vec<String>>,
+    #[serde(default)]
+    pub end: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartitionRouteEntry {
+    pub partition_id: mudu::common::id::OID,
+    pub worker_id: mudu::common::id::OID,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartitionRouteResponse {
+    pub routes: Vec<PartitionRouteEntry>,
+}
+
 #[cfg(target_os = "linux")]
 use crate::backend::app_mgr::AppMgr;
 #[cfg(target_os = "linux")]
@@ -127,6 +149,13 @@ pub trait HttpApi: Send + Sync {
         proc_name: &str,
         body: String,
     ) -> RS<Value>;
+
+    async fn route_partition(&self, _request: PartitionRouteRequest) -> RS<PartitionRouteResponse> {
+        Err(m_error!(
+            EC::NotImplemented,
+            "partition route is not supported"
+        ))
+    }
 
     async fn server_topology(&self) -> RS<ServerTopology> {
         Err(m_error!(
@@ -217,7 +246,7 @@ pub async fn serve_http_api_on_listener_with_stop(
 
     if let Some(stop) = stop {
         let handle = server.handle();
-        tokio::spawn(async move {
+        mudu_sys::task::spawn_tokio(async move {
             stop.wait().await;
             handle.stop(true).await;
         });
@@ -231,12 +260,42 @@ fn configure_routes(cfg: &mut web::ServiceConfig, capabilities: HttpApiCapabilit
         .service(app_proc_list)
         .service(app_proc_detail)
         .service(server_topology)
+        .service(partition_route)
         .service(install);
     if capabilities.enable_invoke {
         cfg.service(invoke);
     }
     if capabilities.enable_uninstall {
         cfg.service(uninstall);
+    }
+}
+
+#[post("/mudu/partition/route")]
+async fn partition_route(
+    body: String,
+    context: web::Data<HttpApiContext>,
+) -> impl Responder {
+    let request = match serde_json::from_str::<PartitionRouteRequest>(&body) {
+        Ok(request) => request,
+        Err(e) => {
+            return HttpResponse::Ok().json(serde_json::json!({
+                "status": 1001,
+                "message": "fail to parse partition route request",
+                "data": e.to_string(),
+            }))
+        }
+    };
+    match context.api.route_partition(request).await {
+        Ok(route) => HttpResponse::Ok().json(serde_json::json!({
+            "status": 0,
+            "message": "ok",
+            "data": route,
+        })),
+        Err(e) => HttpResponse::Ok().json(serde_json::json!({
+            "status": 1001,
+            "message": "fail to route partition",
+            "data": e,
+        })),
     }
 }
 
@@ -514,16 +573,28 @@ async fn find_app(app_mgr: &dyn AppMgr, app_name: &str) -> RS<AppListItem> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use actix_web::{App, test};
+    use actix_web::{test, App};
     #[cfg(target_os = "linux")]
     use mudu::common::app_info::AppInfo;
+    #[cfg(target_os = "linux")]
+    use mudu::common::id::gen_oid;
     #[cfg(target_os = "linux")]
     use mudu_contract::procedure::mod_proc_desc::ModProcDesc;
     #[cfg(target_os = "linux")]
     use mudu_contract::procedure::procedure_result::ProcedureResult;
     use mudu_contract::tuple::tuple_datum::TupleDatum;
     #[cfg(target_os = "linux")]
-    use mudu_kernel::server_ur::procedure_runtime::ProcInvoker;
+    use mudu_kernel::contract::partition_rule::{
+        PartitionBound, PartitionRuleDesc, RangePartitionDef,
+    };
+    #[cfg(target_os = "linux")]
+    use mudu_kernel::contract::partition_rule_binding::PartitionPlacement;
+    #[cfg(target_os = "linux")]
+    use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
+    #[cfg(target_os = "linux")]
+    use mudu_kernel::meta::meta_mgr_factory::MetaMgrFactory;
+    #[cfg(target_os = "linux")]
+    use mudu_type::dat_type_id::DatTypeID;
     #[cfg(target_os = "linux")]
     use std::sync::Mutex;
 
@@ -629,6 +700,9 @@ mod test {
         }
 
         async fn close_session(&mut self, _session_id: u128) -> RS<bool> {
+            if self.closed {
+                return Err(m_error!(EC::IOErr, "close session failed"));
+            }
             self.closed = true;
             Ok(true)
         }
@@ -637,6 +711,7 @@ mod test {
     #[cfg(target_os = "linux")]
     struct MockClientFactory {
         requests: Arc<Mutex<Vec<String>>>,
+        fail_close: bool,
     }
 
     #[cfg(target_os = "linux")]
@@ -645,7 +720,7 @@ mod test {
         async fn connect(&self, _addr: &str) -> RS<Box<dyn AsyncIoUringInvokeClient>> {
             Ok(Box::new(MockClient {
                 session_id: 9,
-                closed: false,
+                closed: self.fail_close,
                 requests: self.requests.clone(),
             }))
         }
@@ -689,7 +764,7 @@ mod test {
             })
         }
 
-        async fn create_invoker(&self, _cfg: &MuduDBCfg) -> RS<Arc<dyn ProcInvoker>> {
+        async fn create_invoker(&self, _cfg: &MuduDBCfg) -> RS<Arc<dyn AsyncFuncInvoker>> {
             Err(m_error!(EC::NotImplemented, "unused in test"))
         }
     }
@@ -700,15 +775,23 @@ mod test {
         let log_dir =
             std::env::temp_dir().join(format!("http_api_test_{}", mudu::common::id::gen_oid()));
         let registry =
-            mudu_kernel::server_ur::worker_registry::load_or_create_worker_registry(&log_dir, 4)
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 4)
                 .unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let api = IoUringHttpApi::with_client_factory(
             Arc::new(MockAppMgr),
             "127.0.0.1:9527".to_string(),
             registry,
+            MetaMgrFactory::create(
+                std::env::temp_dir()
+                    .join(format!("http_api_meta_test_{}", gen_oid()))
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .unwrap(),
             Arc::new(MockClientFactory {
                 requests: requests.clone(),
+                fail_close: false,
             }),
         );
 
@@ -723,5 +806,217 @@ mod test {
             requests.lock().unwrap().as_slice(),
             &["app1/mod1/proc1".to_string()]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[actix_web::test]
+    async fn iouring_http_api_routes_point_and_range_by_rule_name() {
+        let log_dir =
+            std::env::temp_dir().join(format!("http_api_route_test_{}", mudu::common::id::gen_oid()));
+        let registry =
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 4)
+                .unwrap();
+        let meta_dir = std::env::temp_dir().join(format!("http_api_route_meta_{}", gen_oid()));
+        let meta_mgr = MetaMgrFactory::create(meta_dir.to_string_lossy().to_string()).unwrap();
+
+        let rule = PartitionRuleDesc::new_range(
+            "global_rule".to_string(),
+            vec![DatTypeID::I32],
+            vec![
+                RangePartitionDef::new(
+                    "p0".to_string(),
+                    PartitionBound::Unbounded,
+                    PartitionBound::Value(vec![b"100".to_vec()]),
+                ),
+                RangePartitionDef::new(
+                    "p1".to_string(),
+                    PartitionBound::Value(vec![b"100".to_vec()]),
+                    PartitionBound::Unbounded,
+                ),
+            ],
+        );
+        let p0 = rule.partitions[0].partition_id;
+        let p1 = rule.partitions[1].partition_id;
+        let w0 = registry.workers()[0].worker_id;
+        let w1 = registry.workers()[1].worker_id;
+        meta_mgr.create_partition_rule(&rule).await.unwrap();
+        meta_mgr
+            .upsert_partition_placements(&[
+                PartitionPlacement {
+                    partition_id: p0,
+                    worker_id: w0,
+                },
+                PartitionPlacement {
+                    partition_id: p1,
+                    worker_id: w1,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let api = IoUringHttpApi::with_client_factory(
+            Arc::new(MockAppMgr),
+            "127.0.0.1:9527".to_string(),
+            registry,
+            meta_mgr,
+            Arc::new(MockClientFactory {
+                requests: Arc::new(Mutex::new(Vec::new())),
+                fail_close: false,
+            }),
+        );
+
+        let point = api
+            .route_partition(PartitionRouteRequest {
+                rule_name: "global_rule".to_string(),
+                key: Some(vec!["12".to_string()]),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(point.routes.len(), 1);
+        assert_eq!(point.routes[0].partition_id, p0);
+        assert_eq!(point.routes[0].worker_id, w0);
+
+        let range = api
+            .route_partition(PartitionRouteRequest {
+                rule_name: "global_rule".to_string(),
+                key: None,
+                start: Some(vec!["50".to_string()]),
+                end: Some(vec!["150".to_string()]),
+            })
+            .await
+            .unwrap();
+        assert_eq!(range.routes.len(), 2);
+        assert_eq!(range.routes[0].partition_id, p0);
+        assert_eq!(range.routes[0].worker_id, w0);
+        assert_eq!(range.routes[1].partition_id, p1);
+        assert_eq!(range.routes[1].worker_id, w1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[actix_web::test]
+    async fn iouring_http_api_lists_metadata_and_topology() {
+        let log_dir =
+            std::env::temp_dir().join(format!("http_api_meta_list_{}", mudu::common::id::gen_oid()));
+        let registry =
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 3)
+                .unwrap();
+        let meta_mgr = MetaMgrFactory::create(
+            std::env::temp_dir()
+                .join(format!("http_api_meta_mgr_{}", gen_oid()))
+                .to_string_lossy()
+                .to_string(),
+        )
+        .unwrap();
+        let api = IoUringHttpApi::with_client_factory(
+            Arc::new(MockAppMgr),
+            "127.0.0.1:9527".to_string(),
+            registry.clone(),
+            meta_mgr,
+            Arc::new(MockClientFactory {
+                requests: Arc::new(Mutex::new(Vec::new())),
+                fail_close: false,
+            }),
+        );
+
+        assert_eq!(api.list_apps().await.unwrap(), vec!["app1".to_string()]);
+        assert_eq!(
+            api.list_procedures("app1").await.unwrap(),
+            vec!["mod1/proc1".to_string()]
+        );
+        let (desc, param_json, return_json) = api
+            .procedure_detail("app1", "mod1", "proc1")
+            .await
+            .unwrap();
+        assert_eq!(desc.proc_name(), "proc1");
+        assert_eq!(param_json["value"], 0);
+        assert_eq!(return_json["value"], 0);
+
+        let topology = api.server_topology().await.unwrap();
+        assert_eq!(topology.worker_count, registry.workers().len());
+        assert_eq!(topology.workers.len(), registry.workers().len());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[actix_web::test]
+    async fn iouring_http_api_surfaces_close_session_failure() {
+        let log_dir =
+            std::env::temp_dir().join(format!("http_api_close_err_{}", mudu::common::id::gen_oid()));
+        let registry =
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 2)
+                .unwrap();
+        let meta_mgr = MetaMgrFactory::create(
+            std::env::temp_dir()
+                .join(format!("http_api_close_meta_{}", gen_oid()))
+                .to_string_lossy()
+                .to_string(),
+        )
+        .unwrap();
+        let api = IoUringHttpApi::with_client_factory(
+            Arc::new(MockAppMgr),
+            "127.0.0.1:9527".to_string(),
+            registry,
+            meta_mgr,
+            Arc::new(MockClientFactory {
+                requests: Arc::new(Mutex::new(Vec::new())),
+                fail_close: true,
+            }),
+        );
+
+        let err = api
+            .invoke_json("app1", "mod1", "proc1", r#"{"value": 7}"#.to_string())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("close session failed"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[actix_web::test]
+    async fn iouring_http_api_rejects_mixed_route_request_shapes() {
+        let log_dir = std::env::temp_dir()
+            .join(format!("http_api_route_shape_{}", mudu::common::id::gen_oid()));
+        let registry =
+            mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 2)
+                .unwrap();
+        let meta_mgr = MetaMgrFactory::create(
+            std::env::temp_dir()
+                .join(format!("http_api_route_shape_meta_{}", gen_oid()))
+                .to_string_lossy()
+                .to_string(),
+        )
+        .unwrap();
+        let rule = PartitionRuleDesc::new_range(
+            "shape_rule".to_string(),
+            vec![DatTypeID::I32],
+            vec![RangePartitionDef::new(
+                "p0".to_string(),
+                PartitionBound::Unbounded,
+                PartitionBound::Unbounded,
+            )],
+        );
+        meta_mgr.create_partition_rule(&rule).await.unwrap();
+
+        let api = IoUringHttpApi::with_client_factory(
+            Arc::new(MockAppMgr),
+            "127.0.0.1:9527".to_string(),
+            registry,
+            meta_mgr,
+            Arc::new(MockClientFactory {
+                requests: Arc::new(Mutex::new(Vec::new())),
+                fail_close: false,
+            }),
+        );
+
+        let err = api
+            .route_partition(PartitionRouteRequest {
+                rule_name: "shape_rule".to_string(),
+                key: Some(vec!["1".to_string()]),
+                start: Some(vec!["0".to_string()]),
+                end: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot specify both key and range"));
     }
 }

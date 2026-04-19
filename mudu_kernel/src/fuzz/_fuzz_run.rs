@@ -19,7 +19,7 @@ lazy_static! {
         ),
         (
             "_de_en_x_l_batch",
-            crate::contract::xl_batch::_fuzz::_dc_en_x_l_batch,
+            crate::wal::xl_batch::_fuzz::_de_en_x_l_batch,
         ),
         ("_gen_order_csv", crate::test::fuzz_gen_csv::_gen_order_csv,),
     ];

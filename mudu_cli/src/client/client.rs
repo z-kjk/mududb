@@ -6,10 +6,10 @@ use mudu_contract::protocol::{
     PutRequest, RangeScanRequest, ServerResponse, SessionCloseRequest, SessionCreateRequest,
     decode_error_response, decode_get_response, decode_procedure_invoke_response,
     decode_put_response, decode_range_scan_response, decode_server_response,
-    decode_session_close_response, decode_session_create_response, encode_client_request,
-    encode_client_request_with_message_type, encode_get_request, encode_procedure_invoke_request,
-    encode_put_request, encode_range_scan_request, encode_session_close_request,
-    encode_session_create_request,
+    decode_session_close_response, decode_session_create_response, encode_batch_request,
+    encode_client_request, encode_client_request_with_message_type, encode_get_request,
+    encode_procedure_invoke_request, encode_put_request, encode_range_scan_request,
+    encode_session_close_request, encode_session_create_request,
 };
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -54,6 +54,19 @@ impl SyncClient {
         let request = ClientRequest::new(app_name, sql);
         let payload =
             encode_client_request_with_message_type(MessageType::Execute, request_id, &request)?;
+        let frame = self.send_and_receive(&payload)?;
+        self.ensure_success_frame(&frame)?;
+        decode_server_response(&frame)
+    }
+
+    pub fn batch(
+        &mut self,
+        app_name: impl Into<String>,
+        sql: impl Into<String>,
+    ) -> RS<ServerResponse> {
+        let request_id = self.take_request_id();
+        let request = ClientRequest::new(app_name, sql);
+        let payload = encode_batch_request(request_id, &request)?;
         let frame = self.send_and_receive(&payload)?;
         self.ensure_success_frame(&frame)?;
         decode_server_response(&frame)

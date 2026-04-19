@@ -1,5 +1,4 @@
-use crate::common::bc_dec::{DecErr, Decoder};
-use crate::common::bc_enc::{EncErr, Encoder};
+use crate::common::codec::{DecErr, Decoder, EncErr, Encoder};
 pub struct SliceRef<'r> {
     s: &'r [u8],
     read_pos: usize,
@@ -70,5 +69,53 @@ impl Decoder for SliceRef<'_> {
         } else {
             Err(DecErr::CapacityNotAvailable)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SliceMutRef, SliceRef};
+    use crate::common::codec::{Decoder, Encoder};
+
+    #[test]
+    fn slice_mut_ref_tracks_written_bytes() {
+        let mut buf = [0_u8; 6];
+        let mut writer = SliceMutRef::new(&mut buf);
+
+        writer.write(b"ab").unwrap();
+        writer.write(b"cd").unwrap();
+
+        assert_eq!(writer.capacity(), 6);
+        assert_eq!(writer.write_pos(), 4);
+        assert_eq!(writer.as_slice(), b"abcd");
+    }
+
+    #[test]
+    fn slice_ref_reads_incrementally_and_resize_resets_cursor() {
+        let mut reader = SliceRef::new(b"wxyz");
+        let mut buf = [0_u8; 2];
+
+        reader.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"wx");
+        assert_eq!(reader.read_pos(), 2);
+        assert_eq!(reader.as_slice(), b"wx");
+
+        reader.resize();
+        assert_eq!(reader.read_pos(), 0);
+        assert_eq!(reader.as_slice(), b"");
+    }
+
+    #[test]
+    fn slice_mut_ref_write_returns_capacity_error() {
+        let mut buf = [0_u8; 2];
+        let mut writer = SliceMutRef::new(&mut buf);
+        assert!(writer.write(b"abc").is_err());
+    }
+
+    #[test]
+    fn slice_ref_read_returns_capacity_error() {
+        let mut reader = SliceRef::new(b"a");
+        let mut buf = [0_u8; 2];
+        assert!(reader.read(&mut buf).is_err());
     }
 }

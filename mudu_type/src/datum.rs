@@ -253,6 +253,8 @@ macro_rules! impl_datum_trait {
 impl_datum_trait!(
     (I32, i32, i32),
     (I64, i64, i64),
+    (I128, i128, i128),
+    (U128, u128, u128),
     (F32, f32, f32),
     (F64, f64, f64),
     (String, string, String)

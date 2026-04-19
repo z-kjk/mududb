@@ -28,3 +28,21 @@ impl TypeDeclare {
         self.param.to_info()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TypeDeclare;
+    use mudu_type::dat_type::DatType;
+    use mudu_type::dat_type_id::DatTypeID;
+
+    #[test]
+    fn type_declare_exposes_param_metadata() {
+        let ty = DatType::new_no_param(DatTypeID::I64);
+        let declare = TypeDeclare::new(ty.clone());
+
+        assert_eq!(declare.id(), DatTypeID::I64);
+        assert_eq!(declare.param().dat_type_id(), DatTypeID::I64);
+        assert_eq!(declare.param_info().id, ty.to_info().id);
+        assert_eq!(declare.param_info().param, ty.to_info().param);
+    }
+}

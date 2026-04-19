@@ -11,6 +11,7 @@ path = "src/main.rs"
 mudu = { workspace = true }
 mudu_binding = { workspace = true }
 mudu_contract = { workspace = true }
+mudu_type = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

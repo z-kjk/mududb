@@ -1,6 +1,6 @@
 use crate::config;
 use crate::result_set::LocalResultSet;
-use crate::sql::{datum_type_for_id, replace_placeholders};
+use crate::sql::replace_placeholders;
 use crate::state;
 use lazy_static::lazy_static;
 use mudu::common::id::OID;
@@ -19,11 +19,8 @@ use mudu_contract::protocol::{
     ClientRequest, GetRequest, PutRequest, RangeScanRequest, SessionCloseRequest,
     SessionCreateRequest,
 };
-use mudu_contract::tuple::datum_desc::DatumDesc;
 use mudu_contract::tuple::tuple_field_desc::TupleFieldDesc;
 use mudu_contract::tuple::tuple_value::TupleValue;
-use mudu_type::dat_type_id::DatTypeID;
-use mudu_type::dat_value::DatValue;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -51,8 +48,8 @@ struct AsyncMududSession {
 }
 
 struct QueryRows {
-    columns: Vec<String>,
-    rows: Vec<Vec<String>>,
+    row_desc: TupleFieldDesc,
+    rows: Vec<TupleValue>,
 }
 
 enum AsyncCommand {
@@ -89,6 +86,12 @@ enum AsyncCommand {
         response: SyncSender<RS<QueryRows>>,
     },
     Command {
+        session_id: OID,
+        app_name: String,
+        sql_text: String,
+        response: SyncSender<RS<u64>>,
+    },
+    Batch {
         session_id: OID,
         app_name: String,
         sql_text: String,
@@ -305,12 +308,8 @@ pub fn mudu_query<R: Entity>(
 
     with_session(session_id, |session| {
         let response = session.client.query(app_name.clone(), sql_text.clone())?;
-        let desc = build_desc(response.columns());
-        let rows = response
-            .rows()
-            .iter()
-            .map(|row| row_to_tuple_value(row))
-            .collect::<RS<Vec<_>>>()?;
+        let desc = response.row_desc().clone();
+        let rows = response.rows().to_vec();
         Ok(RecordSet::new(
             Arc::new(LocalResultSet::new(rows)),
             Arc::new(desc),
@@ -332,12 +331,8 @@ pub async fn mudu_query_async<R: Entity>(
         .client
         .query(ClientRequest::new(&app_name, &sql_text))
         .await?;
-    let desc = build_desc(response.columns());
-    let rows = response
-        .rows()
-        .iter()
-        .map(|row| row_to_tuple_value(row))
-        .collect::<RS<Vec<_>>>()?;
+    let desc = response.row_desc().clone();
+    let rows = response.rows().to_vec();
     Ok(RecordSet::new(
         Arc::new(LocalResultSet::new(rows)),
         Arc::new(desc),
@@ -359,6 +354,27 @@ pub fn mudu_command(session_id: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLPar
     })
 }
 
+pub fn mudu_batch(session_id: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    let app_name = config::mudud_app_name()
+        .ok_or_else(|| m_error!(EC::DBInternalError, "missing mudud app name"))?;
+    let sql_text = sql_stmt.to_sql_string();
+
+    if config::mudud_async_session_loop() {
+        return async_batch(session_id, app_name, sql_text);
+    }
+
+    with_session(session_id, |session| {
+        let response = session.client.batch(app_name.clone(), sql_text.clone())?;
+        Ok(response.affected_rows())
+    })
+}
+
 pub async fn mudu_command_async(
     session_id: OID,
     sql_stmt: &dyn SQLStmt,
@@ -373,6 +389,28 @@ pub async fn mudu_command_async(
     let response = session
         .client
         .execute(ClientRequest::new(&app_name, &sql_text))
+        .await?;
+    Ok(response.affected_rows())
+}
+
+pub async fn mudu_batch_async(
+    session_id: OID,
+    sql_stmt: &dyn SQLStmt,
+    params: &dyn SQLParams,
+) -> RS<u64> {
+    if params.size() != 0 {
+        return Err(m_error!(
+            EC::NotImplemented,
+            "batch syscall does not support SQL parameters"
+        ));
+    }
+    let app_name = config::mudud_app_name()
+        .ok_or_else(|| m_error!(EC::DBInternalError, "missing mudud app name"))?;
+    let session = async_session(session_id).await?;
+    let mut session = session.lock().await;
+    let response = session
+        .client
+        .batch(ClientRequest::new(&app_name, sql_stmt.to_sql_string()))
         .await?;
     Ok(response.affected_rows())
 }
@@ -406,23 +444,6 @@ async fn async_session(session_id: OID) -> RS<Arc<AsyncMutex<AsyncMududSession>>
                 format!("session {} does not exist", session_id)
             )
         })
-}
-
-fn build_desc(columns: &[String]) -> TupleFieldDesc {
-    let fields = columns
-        .iter()
-        .map(|column| DatumDesc::new(column.clone(), datum_type_for_id(DatTypeID::String)))
-        .collect();
-    TupleFieldDesc::new(fields)
-}
-
-fn row_to_tuple_value(row: &[String]) -> RS<TupleValue> {
-    Ok(TupleValue::from(
-        row.iter()
-            .cloned()
-            .map(DatValue::from_string)
-            .collect::<Vec<_>>(),
-    ))
 }
 
 fn async_open(worker_id: OID) -> RS<OID> {
@@ -505,12 +526,8 @@ fn async_query<R: Entity>(session_id: OID, app_name: String, sql_text: String) -
         })
         .map_err(|e| m_error!(EC::ThreadErr, "send mudud async query command error", e))?;
     let response = recv_response(rx)?;
-    let desc = build_desc(&response.columns);
-    let rows = response
-        .rows
-        .iter()
-        .map(|row| row_to_tuple_value(row))
-        .collect::<RS<Vec<_>>>()?;
+    let desc = response.row_desc;
+    let rows = response.rows;
     Ok(RecordSet::new(
         Arc::new(LocalResultSet::new(rows)),
         Arc::new(desc),
@@ -528,6 +545,20 @@ fn async_command(session_id: OID, app_name: String, sql_text: String) -> RS<u64>
             response: tx,
         })
         .map_err(|e| m_error!(EC::ThreadErr, "send mudud async command error", e))?;
+    recv_response(rx)
+}
+
+fn async_batch(session_id: OID, app_name: String, sql_text: String) -> RS<u64> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    ASYNC_MANAGER
+        .sender
+        .send(AsyncCommand::Batch {
+            session_id,
+            app_name,
+            sql_text,
+            response: tx,
+        })
+        .map_err(|e| m_error!(EC::ThreadErr, "send mudud async batch command error", e))?;
     recv_response(rx)
 }
 
@@ -723,7 +754,7 @@ async fn handle_async_command(
                     .query(ClientRequest::new(app_name, sql_text))
                     .await?;
                 Ok(QueryRows {
-                    columns: response_data.columns().to_vec(),
+                    row_desc: response_data.row_desc().clone(),
                     rows: response_data.rows().to_vec(),
                 })
             }
@@ -746,6 +777,28 @@ async fn handle_async_command(
                 let response_data = session
                     .client
                     .execute(ClientRequest::new(app_name, sql_text))
+                    .await?;
+                Ok(response_data.affected_rows())
+            }
+            .await;
+            let _ = response.send(result);
+        }
+        AsyncCommand::Batch {
+            session_id,
+            app_name,
+            sql_text,
+            response,
+        } => {
+            let result = async {
+                let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                    m_error!(
+                        EC::NoSuchElement,
+                        format!("session {} does not exist", session_id)
+                    )
+                })?;
+                let response_data = session
+                    .client
+                    .batch(ClientRequest::new(app_name, sql_text))
                     .await?;
                 Ok(response_data.affected_rows())
             }

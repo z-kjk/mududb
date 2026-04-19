@@ -4,10 +4,12 @@ pub mod lang;
 
 mod fn_f32;
 mod fn_f64;
+mod fn_i128;
 mod fn_i32;
 mod fn_i64;
 mod fn_string;
 mod fn_string_param;
+mod fn_u128;
 
 mod fn_array;
 #[cfg(any(test, feature = "test"))]
@@ -21,6 +23,8 @@ mod fn_f32_arb;
 #[cfg(any(test, feature = "test"))]
 mod fn_f64_arb;
 #[cfg(any(test, feature = "test"))]
+mod fn_i128_arb;
+#[cfg(any(test, feature = "test"))]
 mod fn_i32_arb;
 #[cfg(any(test, feature = "test"))]
 mod fn_i64_arb;
@@ -30,3 +34,20 @@ mod fn_object_arb;
 mod fn_object_param;
 #[cfg(any(test, feature = "test"))]
 mod fn_string_arb;
+#[cfg(any(test, feature = "test"))]
+mod fn_u128_arb;
+
+#[cfg(test)]
+mod generic_prop_test;
+
+#[cfg(test)]
+mod object_array_test;
+
+#[cfg(test)]
+mod param_test;
+
+#[cfg(test)]
+mod compare_test;
+
+#[cfg(test)]
+mod error_test;

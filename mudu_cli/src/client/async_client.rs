@@ -9,9 +9,9 @@ use mudu_contract::protocol::{
     SessionCreateResponse, decode_error_response, decode_get_response,
     decode_procedure_invoke_response, decode_put_response, decode_range_scan_response,
     decode_server_response, decode_session_close_response, decode_session_create_response,
-    encode_client_request_with_message_type, encode_get_request, encode_procedure_invoke_request,
-    encode_put_request, encode_range_scan_request, encode_session_close_request,
-    encode_session_create_request,
+    encode_batch_request, encode_client_request_with_message_type, encode_get_request,
+    encode_procedure_invoke_request, encode_put_request, encode_range_scan_request,
+    encode_session_close_request, encode_session_create_request,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -20,6 +20,7 @@ use tokio::net::TcpStream;
 pub trait AsyncClient: Send {
     async fn query(&mut self, request: ClientRequest) -> RS<ServerResponse>;
     async fn execute(&mut self, request: ClientRequest) -> RS<ServerResponse>;
+    async fn batch(&mut self, request: ClientRequest) -> RS<ServerResponse>;
     async fn get(&mut self, request: GetRequest) -> RS<GetResponse>;
     async fn put(&mut self, request: PutRequest) -> RS<PutResponse>;
     async fn range_scan(&mut self, request: RangeScanRequest) -> RS<RangeScanResponse>;
@@ -123,6 +124,12 @@ impl AsyncClient for AsyncClientImpl {
         decode_server_response(&frame)
     }
 
+    async fn batch(&mut self, request: ClientRequest) -> RS<ServerResponse> {
+        let payload = encode_batch_request(self.take_request_id(), &request)?;
+        let frame = self.send_and_receive(&payload).await?;
+        decode_server_response(&frame)
+    }
+
     async fn get(&mut self, request: GetRequest) -> RS<GetResponse> {
         let payload = encode_get_request(self.take_request_id(), &request)?;
         let frame = self.send_and_receive(&payload).await?;
@@ -174,6 +181,12 @@ mod tests {
         encode_put_response, encode_range_scan_response, encode_server_response,
         encode_session_close_response, encode_session_create_response,
     };
+    use mudu_contract::tuple::datum_desc::DatumDesc;
+    use mudu_contract::tuple::tuple_field_desc::TupleFieldDesc;
+    use mudu_contract::tuple::tuple_value::TupleValue;
+    use mudu_type::dat_type::DatType;
+    use mudu_type::dat_type_id::DatTypeID;
+    use mudu_type::dat_value::DatValue;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
@@ -207,8 +220,11 @@ mod tests {
                     &encode_server_response(
                         query_frame.header().request_id(),
                         &ServerResponse::new(
-                            vec!["value".to_string()],
-                            vec![vec!["1".to_string()]],
+                            TupleFieldDesc::new(vec![DatumDesc::new(
+                                "value".to_string(),
+                                DatType::default_for(DatTypeID::String),
+                            )]),
+                            vec![TupleValue::from(vec![DatValue::from_string("1".to_string())])],
                             0,
                             None,
                         ),
@@ -225,7 +241,7 @@ mod tests {
                 .write_all(
                     &encode_server_response(
                         execute_frame.header().request_id(),
-                        &ServerResponse::new(vec![], vec![], 2, None),
+                        &ServerResponse::new(TupleFieldDesc::new(vec![]), vec![], 2, None),
                     )
                     .unwrap(),
                 )
@@ -237,8 +253,8 @@ mod tests {
             .query(ClientRequest::new("demo", "select 1"))
             .await
             .unwrap();
-        assert_eq!(query.columns(), &["value".to_string()]);
-        assert_eq!(query.rows(), &[vec!["1".to_string()]]);
+        assert_eq!(query.row_desc().fields()[0].name(), "value");
+        assert_eq!(query.rows()[0].values()[0].expect_string(), "1");
 
         let execute = client
             .execute(ClientRequest::new("demo", "delete from t"))

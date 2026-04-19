@@ -1,0 +1,11 @@
+pub mod customer;
+pub mod district;
+pub mod history;
+pub mod item;
+pub mod new_order;
+pub mod order_line;
+pub mod orders;
+pub mod procedure;
+pub mod procedure_common;
+pub mod stock;
+pub mod warehouse;

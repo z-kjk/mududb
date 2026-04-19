@@ -3,7 +3,7 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use mudu_utils::sync::async_task::TaskWrapper;
-use tracing::info;
+use tracing::debug;
 
 pub struct ServiceImpl {
     tasks: scc::Queue<TaskWrapper>,
@@ -58,7 +58,7 @@ impl ServiceTrait for ServiceImpl {
                     Ok(result)
                 }
             })?;
-        info!("task join result: {:?}", r);
+        debug!("task join result: {:?}", r);
         Ok(())
     }
 }

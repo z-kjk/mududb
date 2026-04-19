@@ -421,6 +421,12 @@ impl ResultSet for ResultSetWrapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mudu_binding::system::{command_invoke, query_invoke};
+    use mudu_binding::universal::uni_session_open_argv::UniSessionOpenArgv;
+    use mudu_contract::database::sql_stmt_text::SQLStmtText;
+    use mudu_contract::tuple::tuple_datum::TupleDatum;
+    use mudu_contract::tuple::tuple_value::TupleValue;
+    use mudu_type::dat_value::DatValue;
 
     #[test]
     fn kv_get_roundtrip() {
@@ -451,5 +457,94 @@ mod tests {
                 (b"b".to_vec(), b"2".to_vec())
             ]
         );
+    }
+
+    #[test]
+    fn open_and_open_argv_helpers_roundtrip() {
+        let oid = invoke_host_open(|_| Ok(serialize_open_result(15))).unwrap();
+        assert_eq!(oid, 15);
+
+        let argv = UniSessionOpenArgv::new(7);
+        let oid = invoke_host_open_argv(&argv, |input| {
+            let decoded = deserialize_open_param(&input).unwrap();
+            assert_eq!(decoded.worker_oid(), 7);
+            Ok(serialize_open_result(21))
+        })
+        .unwrap();
+        assert_eq!(oid, 21);
+    }
+
+    #[test]
+    fn command_and_query_helpers_decode_serialized_results() {
+        let stmt = SQLStmtText::new("SELECT 1".to_string());
+
+        let affected = invoke_host_command(3, &stmt, &(), |input| {
+            let (oid, _, _) = command_invoke::deserialize_command_param(&input).unwrap();
+            assert_eq!(oid, 3);
+            Ok(command_invoke::serialize_command_result(Ok(5)))
+        })
+        .unwrap();
+        assert_eq!(affected, 5);
+
+        let records = invoke_host_query::<i32, _>(4, &stmt, &(), |input| {
+            let (oid, _, _) = query_invoke::deserialize_query_param(&input).unwrap();
+            assert_eq!(oid, 4);
+            Ok(query_invoke::serialize_query_result(Ok((
+                mudu_contract::database::result_batch::ResultBatch::from(
+                    4,
+                    vec![TupleValue::from(vec![DatValue::from_i32(8)])],
+                    true,
+                ),
+                <i32 as TupleDatum>::tuple_desc_static(&["value".to_string()]),
+            ))))
+        })
+        .unwrap();
+        assert_eq!(records.next_record().unwrap(), Some(8));
+    }
+
+    #[tokio::test]
+    async fn async_host_helpers_roundtrip_sync_payload_shapes() {
+        let stmt = SQLStmtText::new("SELECT 1".to_string());
+
+        let oid = async_invoke_host_open(|_| async { Ok(serialize_open_result(31)) })
+            .await
+            .unwrap();
+        assert_eq!(oid, 31);
+
+        let affected = async_invoke_host_batch(6, &stmt, &(), |input: Vec<u8>| async move {
+            let (oid, _, _) = command_invoke::deserialize_command_param(&input).unwrap();
+            assert_eq!(oid, 6);
+            Ok(command_invoke::serialize_command_result(Ok(2)))
+        })
+        .await
+        .unwrap();
+        assert_eq!(affected, 2);
+
+        let records =
+            async_invoke_host_query::<i32, _>(8, &stmt, &(), |input: Vec<u8>| async move {
+            let (oid, _, _) = query_invoke::deserialize_query_param(&input).unwrap();
+            assert_eq!(oid, 8);
+            Ok(query_invoke::serialize_query_result(Ok((
+                mudu_contract::database::result_batch::ResultBatch::from(
+                    8,
+                    vec![TupleValue::from(vec![DatValue::from_i32(13)])],
+                    true,
+                ),
+                <i32 as TupleDatum>::tuple_desc_static(&["value".to_string()]),
+            ))))
+        })
+        .await
+        .unwrap();
+        assert_eq!(records.next_record().unwrap(), Some(13));
+
+        let got = async_invoke_host_session_get(9, b"k", |input: Vec<u8>| async move {
+            let (oid, key) = deserialize_session_get_param(&input).unwrap();
+            assert_eq!(oid, 9);
+            assert_eq!(key, b"k");
+            Ok(serialize_get_result(Some(b"v")))
+        })
+        .await
+        .unwrap();
+        assert_eq!(got, Some(b"v".to_vec()));
     }
 }

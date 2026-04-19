@@ -158,7 +158,12 @@ impl PreparedStmtImpl {
             .lock()
             .map_err(|_| m_error!(EC::MutexError, "lock prepared stmt error"))?
             .take()
-            .ok_or_else(|| m_error!(EC::ExistingSuchElement, "prepared statement is still in use"))
+            .ok_or_else(|| {
+                m_error!(
+                    EC::ExistingSuchElement,
+                    "prepared statement is still in use"
+                )
+            })
     }
 
     fn restore_prepared(&self, prepared: Prepared) -> RS<()> {
@@ -254,6 +259,8 @@ fn _to_libsql_value(datum: &DatValue, ty: &DatType) -> RS<libsql::Value> {
     let v = match id {
         DatTypeID::I32 => libsql::Value::Integer(datum.expect_i32().clone() as _),
         DatTypeID::I64 => libsql::Value::Integer(datum.expect_i64().clone() as _),
+        DatTypeID::U128 => libsql::Value::Text(datum.expect_u128().to_string()),
+        DatTypeID::I128 => libsql::Value::Text(datum.expect_i128().to_string()),
         DatTypeID::F32 => libsql::Value::Real(datum.expect_f32().clone() as _),
         DatTypeID::F64 => libsql::Value::Real(datum.expect_f64().clone() as _),
         DatTypeID::String => libsql::Value::Text(datum.expect_string().clone()),
@@ -396,7 +403,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_db_path(label: &str) -> String {
-        let nanos = SystemTime::now()
+        let nanos = mudu_sys::time::system_time_now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();

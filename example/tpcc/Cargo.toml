@@ -1,0 +1,49 @@
+[package]
+name = "tpcc"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+debug_trace = [
+    "dep:async-backtrace"
+]
+benchmark-runner = [
+    "dep:clap",
+    "dep:mudu_adapter",
+    "dep:mudu_cli",
+    "dep:mudu_utils",
+    "dep:tokio",
+    "debug_trace",
+    "sys_interface/standalone-adapter",
+]
+
+[dependencies]
+mudu = { workspace = true }
+mudu_sys = { workspace = true }
+mudu_type = { workspace = true }
+mudu_contract = { workspace = true }
+mudu_binding = { workspace = true }
+mudu_adapter = { workspace = true, optional = true }
+mudu_cli = { workspace = true, optional = true }
+mudu_utils = { workspace = true, optional = true, features = ["debug_trace"] }
+sys_interface = { workspace = true, features = ["async"] }
+wit-bindgen = { workspace = true }
+lazy_static = { workspace = true }
+clap = { workspace = true, optional = true, features = ["derive"] }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
+async-backtrace = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+mudu_adapter = { workspace = true }
+mudu_runtime = { workspace = true }
+sys_interface = { workspace = true, features = ["standalone-adapter"] }
+testing = { path = "../../testing" }
+
+[[bin]]
+name = "tpcc-benchmark"
+path = "src/bin/tpcc_benchmark.rs"
+required-features = ["benchmark-runner"]

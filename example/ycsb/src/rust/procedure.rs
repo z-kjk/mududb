@@ -56,3 +56,49 @@ pub fn ycsb_read_modify_write(xid: XID, user_key: String, append_value: String) 
     mudu_put(xid, key.as_bytes(), current.as_bytes())?;
     Ok(current)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ycsb_insert, ycsb_read, ycsb_read_modify_write, ycsb_scan, ycsb_update};
+    use crate::test_lock;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use sys_interface::sync_api::{mudu_close, mudu_open};
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ycsb_{name}_{suffix}.db"))
+    }
+
+    #[test]
+    fn ycsb_sync_procedures_roundtrip_against_standalone_adapter() {
+        let _guard = test_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let db_path = temp_db_path("sync");
+        mudu_adapter::config::reset_db_path_override_for_test();
+        mudu_adapter::syscall::set_db_path(&db_path);
+
+        let xid = mudu_open().unwrap();
+        ycsb_insert(xid, "u1".to_string(), "v1".to_string()).unwrap();
+        ycsb_insert(xid, "u2".to_string(), "v2".to_string()).unwrap();
+
+        assert_eq!(ycsb_read(xid, "u1".to_string()).unwrap(), "v1");
+
+        ycsb_update(xid, "u1".to_string(), "v3".to_string()).unwrap();
+        assert_eq!(ycsb_read(xid, "u1".to_string()).unwrap(), "v3");
+
+        assert_eq!(
+            ycsb_scan(xid, "u1".to_string(), "uz".to_string()).unwrap(),
+            vec!["user/u1=v3".to_string(), "user/u2=v2".to_string()]
+        );
+
+        assert_eq!(
+            ycsb_read_modify_write(xid, "u1".to_string(), "-x".to_string()).unwrap(),
+            "v3-x"
+        );
+
+        mudu_close(xid).unwrap();
+    }
+}

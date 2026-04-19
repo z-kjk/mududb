@@ -20,5 +20,8 @@ pub async fn mudu_batch(oid: OID, sql: &dyn SQLStmt, params: &dyn SQLParams) -> 
 
 - `oid`: current session ID
 - `sql`: SQL text to run as a batch
-- `params`: currently must be empty for the libsql-backed batch syscall
+- `params`: currently must be empty
+- host support:
+  SQLite, PostgreSQL, and MySQL standalone adapters implement `batch`
+  `mudud` currently returns `NotImplemented`
 - return value: affected row count delta reported by the underlying connection

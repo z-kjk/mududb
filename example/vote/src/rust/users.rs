@@ -298,4 +298,35 @@ pub mod object {
             PHONE
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Users;
+        use mudu_contract::database::entity::Entity;
+        use mudu_type::datum::{Datum, DatumDyn};
+
+        #[test]
+        fn users_roundtrip_value_binary_and_field_access() {
+            let user = Users::new(Some("u-1".to_string()), Some("13800138000".to_string()));
+
+            let value = user.to_value(Users::dat_type()).unwrap();
+            let from_value = Users::from_value(&value).unwrap();
+            assert_eq!(from_value.get_user_id().as_deref(), Some("u-1"));
+            assert_eq!(from_value.get_phone().as_deref(), Some("13800138000"));
+
+            let binary = user.to_binary(Users::dat_type()).unwrap();
+            let from_binary = Users::from_binary(binary.as_ref()).unwrap();
+            assert_eq!(from_binary.get_phone().as_deref(), Some("13800138000"));
+
+            let mut updated = Users::new_empty();
+            updated
+                .set_field_value("user_id", mudu_type::dat_value::DatValue::from_string("u-2".to_string()))
+                .unwrap();
+            updated
+                .set_field_value("phone", mudu_type::dat_value::DatValue::from_string("13900139000".to_string()))
+                .unwrap();
+            assert_eq!(updated.get_user_id().as_deref(), Some("u-2"));
+            assert_eq!(updated.get_phone().as_deref(), Some("13900139000"));
+        }
+    }
 }

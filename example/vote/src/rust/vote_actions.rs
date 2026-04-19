@@ -553,4 +553,35 @@ pub mod object {
             IS_WITHDRAWN
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::VoteActions;
+        use mudu_contract::database::entity::Entity;
+        use mudu_type::datum::{Datum, DatumDyn};
+
+        #[test]
+        fn vote_actions_roundtrip_and_field_updates() {
+            let action = VoteActions::new(
+                Some("a1".to_string()),
+                Some("u1".to_string()),
+                Some("v1".to_string()),
+                Some(10),
+                Some(0),
+            );
+
+            let from_value = VoteActions::from_value(&action.to_value(VoteActions::dat_type()).unwrap()).unwrap();
+            assert_eq!(from_value.get_action_id().as_deref(), Some("a1"));
+            assert_eq!(from_value.get_action_time(), &Some(10));
+
+            let from_binary = VoteActions::from_binary(action.to_binary(VoteActions::dat_type()).unwrap().as_ref()).unwrap();
+            assert_eq!(from_binary.get_is_withdrawn(), &Some(0));
+
+            let mut updated = VoteActions::new_empty();
+            updated.set_field_value("action_id", mudu_type::dat_value::DatValue::from_string("a2".to_string())).unwrap();
+            updated.set_field_value("is_withdrawn", mudu_type::dat_value::DatValue::from_i32(1)).unwrap();
+            assert_eq!(updated.get_action_id().as_deref(), Some("a2"));
+            assert_eq!(updated.get_is_withdrawn(), &Some(1));
+        }
+    }
 }

@@ -1,6 +1,7 @@
+use crate::contract::meta_mgr::MetaMgr;
 use crate::contract::query_exec::QueryExec;
+use crate::executor::project_tuple_desc;
 use crate::x_engine::api::{RSCursor, TupleRow, XContract};
-use crate::x_engine::thd_ctx::ThdCtx;
 use crate::x_engine::x_param::PAccessRange;
 use async_trait::async_trait;
 use mudu::common::result::RS;
@@ -9,20 +10,28 @@ use mudu_utils::sync::a_mutex::AMutex;
 use std::sync::Arc;
 
 pub struct IndexAccessRange {
+    tuple_desc: TupleDesc,
     inner: AMutex<_IndexAccessRange>,
 }
 
 struct _IndexAccessRange {
-    param: Option<PAccessRange>,
+    param: PAccessRange,
     cursor: Option<Arc<dyn RSCursor>>,
-    thd_ctx: ThdCtx,
+    x_contract: Arc<dyn XContract>,
 }
 
 impl IndexAccessRange {
-    fn new(param: PAccessRange, thd_ctx: ThdCtx) -> Self {
-        Self {
-            inner: AMutex::new(_IndexAccessRange::new(param, thd_ctx)),
-        }
+    pub async fn new(
+        param: PAccessRange,
+        x_contract: Arc<dyn XContract>,
+        meta_mgr: Arc<dyn MetaMgr>,
+    ) -> RS<Self> {
+        let table_desc = meta_mgr.get_table_by_id(param.table_id).await?;
+        let tuple_desc = project_tuple_desc(&table_desc, &param.select);
+        Ok(Self {
+            tuple_desc,
+            inner: AMutex::new(_IndexAccessRange::new(param, x_contract)),
+        })
     }
 }
 
@@ -30,7 +39,7 @@ impl IndexAccessRange {
 impl QueryExec for IndexAccessRange {
     async fn open(&self) -> RS<()> {
         let mut inner = self.inner.lock().await;
-        (*inner).open().await
+        inner.open().await
     }
 
     async fn next(&self) -> RS<Option<TupleRow>> {
@@ -39,50 +48,44 @@ impl QueryExec for IndexAccessRange {
     }
 
     fn tuple_desc(&self) -> RS<TupleDesc> {
-        todo!()
+        Ok(self.tuple_desc.clone())
     }
 }
 
 impl _IndexAccessRange {
-    fn new(param: PAccessRange, thd_ctx: ThdCtx) -> Self {
+    fn new(param: PAccessRange, x_contract: Arc<dyn XContract>) -> Self {
         Self {
-            param: Some(param),
+            param,
             cursor: None,
-            thd_ctx,
+            x_contract,
         }
     }
 
     async fn open(&mut self) -> RS<()> {
-        if self.param.is_some() {
-            return Ok(());
-        }
-        let mut param = None;
-        std::mem::swap(&mut self.param, &mut param);
-        let p = param.unwrap();
-        let t = self
-            .thd_ctx
+        let param = &self.param;
+        let cursor = self
+            .x_contract
             .read_range(
-                p.xid,
-                p.table_id,
-                &p.pred_key,
-                &p.pred_non_key,
-                &p.select,
-                &p.opt_read,
+                param.tx_mgr.clone(),
+                param.table_id,
+                &param.pred_key,
+                &param.pred_non_key,
+                &param.select,
+                &param.opt_read,
             )
             .await?;
-        self.cursor = Some(t);
-
+        self.cursor = Some(cursor);
         Ok(())
     }
 
     async fn next(&mut self) -> RS<Option<TupleRow>> {
         match &self.cursor {
-            Some(c) => {
-                let opt = c.next().await?;
-                if opt.is_none() {
+            Some(cursor) => {
+                let row = cursor.next().await?;
+                if row.is_none() {
                     self.cursor = None;
                 }
-                Ok(opt)
+                Ok(row)
             }
             None => Ok(None),
         }

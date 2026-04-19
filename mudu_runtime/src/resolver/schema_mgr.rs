@@ -5,18 +5,16 @@ use mudu::m_error;
 use sql_parser::parser::ddl_parser::DDLParser;
 
 use mudu_binding::record::record_def::RecordDef;
-use mudu_type::db_type::{DBType, db_type_mgr};
 use scc::HashMap as SCCHashMap;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::read_to_string;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const DDL_SQL_EXTENSION: &str = "sql";
 #[derive(Clone)]
 pub struct SchemaMgr {
-    map: Arc<Mutex<HashMap<String, RecordDef>>>,
-    db_type: Arc<dyn DBType>,
+    tables: Arc<HashMap<String, RecordDef>>,
 }
 
 lazy_static! {
@@ -37,14 +35,13 @@ fn _mgr_remove(app_name: &String) {
 
 impl SchemaMgr {
     pub fn from_sql_text(sql_text: &String) -> RS<SchemaMgr> {
-        let schema_mgr = SchemaMgr::new_empty()?;
         let parser = DDLParser::new();
-        schema_mgr.load_from_sql_text(sql_text, &parser)?;
-        Ok(schema_mgr)
+        let tables = load_table_map_from_sql_text(sql_text, &parser)?;
+        Ok(Self {
+            tables: Arc::new(tables),
+        })
     }
-    pub fn db_type(&self) -> &dyn DBType {
-        self.db_type.as_ref()
-    }
+
     pub fn get_mgr(app_name: &String) -> Option<SchemaMgr> {
         _mgr_get(app_name)
     }
@@ -59,7 +56,7 @@ impl SchemaMgr {
 
     pub fn load_from_ddl_path(ddl_path: &String) -> RS<SchemaMgr> {
         let parser = DDLParser::new();
-        let schema_mgr = SchemaMgr::new_empty()?;
+        let mut tables = HashMap::new();
         for entry in fs::read_dir(ddl_path).map_err(|e| {
             m_error!(
                 EC::MuduError,
@@ -85,52 +82,34 @@ impl SchemaMgr {
                                 ));
                             }
                         };
-                        schema_mgr.load_from_sql_text(&str, &parser)?;
+                        tables.extend(load_table_map_from_sql_text(&str, &parser)?);
                     }
                 }
             }
         }
 
-        Ok(schema_mgr)
-    }
-
-    pub fn new_empty() -> RS<Self> {
         Ok(Self {
-            map: Arc::new(Mutex::new(HashMap::new())),
-            db_type: db_type_mgr()?,
+            tables: Arc::new(tables),
         })
     }
 
-    pub fn insert(&self, key: String, table_def: RecordDef) -> RS<bool> {
-        let mut g = self.map.lock().unwrap();
-        if !g.contains_key(&key) {
-            g.insert(key, table_def);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
     pub fn get(&self, key: &String) -> RS<Option<RecordDef>> {
-        let g = self.map.lock().unwrap();
-        let opt = g.get(key);
-        if let Some(def) = opt {
-            Ok(Some((*def).clone()))
-        } else {
-            Ok(None)
-        }
+        Ok(self.tables.get(key).cloned())
     }
 
     pub fn table_names(&self) -> Vec<String> {
-        let g = self.map.lock().unwrap();
-        g.keys().cloned().collect()
+        self.tables.keys().cloned().collect()
     }
+}
 
-    fn load_from_sql_text(&self, sql_text: &String, parser: &DDLParser) -> RS<()> {
-        let table_def_list = parser.parse(sql_text)?;
-        for table_def in table_def_list {
-            self.insert(table_def.table_name().clone(), table_def)?;
-        }
-        Ok(())
+fn load_table_map_from_sql_text(
+    sql_text: &String,
+    parser: &DDLParser,
+) -> RS<HashMap<String, RecordDef>> {
+    let table_def_list = parser.parse(sql_text)?;
+    let mut tables = HashMap::with_capacity(table_def_list.len());
+    for table_def in table_def_list {
+        tables.insert(table_def.table_name().clone(), table_def);
     }
+    Ok(tables)
 }

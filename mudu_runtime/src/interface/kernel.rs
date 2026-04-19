@@ -1,3 +1,4 @@
+use crate::async_utils::blocking::run_async;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
@@ -6,7 +7,7 @@ use mudu_binding::codec::handle_sys_session;
 use mudu_contract::database::result_batch::ResultBatch;
 use mudu_contract::database::sql::Context;
 use mudu_contract::tuple::tuple_field_desc::TupleFieldDesc;
-use mudu_kernel::server_ur::worker_local::WorkerLocalRef;
+use mudu_kernel::server::worker_local::WorkerLocalRef;
 
 /// Execute a SQL query with parameters
 pub fn query_internal(query_in: &[u8]) -> Vec<u8> {
@@ -47,7 +48,8 @@ fn _command_internal(command_in: &[u8]) -> RS<u64> {
 }
 
 fn _batch_internal(batch_in: &[u8]) -> RS<u64> {
-    let (oid, stmt, param) = mudu_binding::system::command_invoke::deserialize_command_param(batch_in)?;
+    let (oid, stmt, param) =
+        mudu_binding::system::command_invoke::deserialize_command_param(batch_in)?;
     let context = get_context(oid)?;
     context.batch(stmt.as_ref(), param.as_ref())
 }
@@ -92,7 +94,8 @@ async fn _async_command_internal(command_in: Vec<u8>) -> RS<u64> {
 }
 
 async fn _async_batch_internal(batch_in: Vec<u8>) -> RS<u64> {
-    let (oid, stmt, param) = mudu_binding::system::command_invoke::deserialize_command_param(&batch_in)?;
+    let (oid, stmt, param) =
+        mudu_binding::system::command_invoke::deserialize_command_param(&batch_in)?;
     let context = get_context(oid)?;
     context.batch_async(stmt, param).await
 }
@@ -113,8 +116,9 @@ pub fn open_internal_with_worker_local(
     worker_local: Option<&WorkerLocalRef>,
 ) -> RS<Vec<u8>> {
     let open_argv = handle_sys_session::deserialize_open_param(open_in)?;
-    let worker_local = require_worker_local(worker_local)?;
-    let opened = worker_local.open_argv(open_argv.worker_oid())?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    let worker_oid = open_argv.worker_oid();
+    let opened = run_async(async move { worker_local.open_argv_async(worker_oid).await })??;
     Ok(handle_sys_session::serialize_open_result(opened))
 }
 
@@ -123,8 +127,8 @@ pub fn close_internal_with_worker_local(
     worker_local: Option<&WorkerLocalRef>,
 ) -> RS<Vec<u8>> {
     let session_id: OID = handle_sys_session::deserialize_close_param(close_in)?;
-    let worker_local = require_worker_local(worker_local)?;
-    worker_local.close(session_id)?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    run_async(async move { worker_local.close_async(session_id).await })??;
     Ok(handle_sys_session::serialize_close_result())
 }
 
@@ -137,12 +141,10 @@ pub fn get_internal_with_worker_local(
     get_in: &[u8],
     worker_local: Option<&WorkerLocalRef>,
 ) -> RS<Vec<u8>> {
-    let result =
-        handle_sys_session::deserialize_session_get_param(get_in).and_then(|(session_id, key)| {
-            let worker_local = require_worker_local(worker_local)?;
-            worker_local.get(session_id, &key)
-        });
-    Ok(handle_sys_session::serialize_get_result(result?.as_deref()))
+    let (session_id, key) = handle_sys_session::deserialize_session_get_param(get_in)?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    let result = run_async(async move { worker_local.get_async(session_id, &key).await })??;
+    Ok(handle_sys_session::serialize_get_result(result.as_deref()))
 }
 
 pub fn put_internal(put_in: &[u8]) -> Vec<u8> {
@@ -154,14 +156,25 @@ pub fn put_internal_with_worker_local(
     put_in: &[u8],
     worker_local: Option<&WorkerLocalRef>,
 ) -> RS<Vec<u8>> {
-    let result = handle_sys_session::deserialize_session_put_param(put_in).and_then(
-        |(session_id, key, value)| {
-            let worker_local = require_worker_local(worker_local)?;
-            worker_local.put(session_id, key, value)
-        },
-    );
-    result?;
+    let (session_id, key, value) = handle_sys_session::deserialize_session_put_param(put_in)?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    run_async(async move { worker_local.put_async(session_id, key, value).await })??;
     Ok(handle_sys_session::serialize_put_result())
+}
+
+pub fn delete_internal(delete_in: &[u8]) -> Vec<u8> {
+    delete_internal_with_worker_local(delete_in, None)
+        .unwrap_or_else(|e| panic!("worker-local delete is not available: {}", e))
+}
+
+pub fn delete_internal_with_worker_local(
+    delete_in: &[u8],
+    worker_local: Option<&WorkerLocalRef>,
+) -> RS<Vec<u8>> {
+    let (session_id, key) = handle_sys_session::deserialize_session_delete_param(delete_in)?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    run_async(async move { worker_local.delete_async(session_id, &key).await })??;
+    Ok(handle_sys_session::serialize_delete_result())
 }
 
 pub fn range_internal(range_in: &[u8]) -> Vec<u8> {
@@ -173,17 +186,15 @@ pub fn range_internal_with_worker_local(
     range_in: &[u8],
     worker_local: Option<&WorkerLocalRef>,
 ) -> RS<Vec<u8>> {
-    let result = handle_sys_session::deserialize_session_range_param(range_in).and_then(
-        |(session_id, start, end)| {
-            let worker_local = require_worker_local(worker_local)?;
-            Ok(worker_local
-                .range(session_id, &start, &end)?
-                .into_iter()
-                .map(|item| (item.key, item.value))
-                .collect::<Vec<_>>())
-        },
-    );
-    Ok(handle_sys_session::serialize_range_result(&result?))
+    let (session_id, start, end) = handle_sys_session::deserialize_session_range_param(range_in)?;
+    let worker_local = require_worker_local(worker_local)?.clone();
+    let result =
+        run_async(async move { worker_local.range_async(session_id, &start, &end).await })??;
+    let result = result
+        .into_iter()
+        .map(|item| (item.key, item.value))
+        .collect::<Vec<_>>();
+    Ok(handle_sys_session::serialize_range_result(&result))
 }
 
 pub async fn async_get_internal(get_in: Vec<u8>) -> Vec<u8> {
@@ -194,24 +205,53 @@ pub async fn async_get_internal_with_worker_local(
     get_in: Vec<u8>,
     worker_local: Option<&WorkerLocalRef>,
 ) -> Vec<u8> {
-    get_internal_with_worker_local(&get_in, worker_local)
-        .unwrap_or_else(|e| panic!("worker-local get is not available: {}", e))
+    let result =
+        handle_sys_session::deserialize_session_get_param(&get_in).and_then(|(session_id, key)| {
+            let worker_local = require_worker_local(worker_local)?;
+            Ok((worker_local.clone(), session_id, key))
+        });
+    match result {
+        Ok((worker_local, session_id, key)) => handle_sys_session::serialize_get_result(
+            worker_local
+                .get_async(session_id, &key)
+                .await
+                .unwrap_or_else(|e| panic!("worker-local get is not available: {}", e))
+                .as_deref(),
+        ),
+        Err(e) => panic!("worker-local get is not available: {}", e),
+    }
 }
 
 pub async fn async_open_internal_with_worker_local(
     open_in: Vec<u8>,
     worker_local: Option<&WorkerLocalRef>,
 ) -> Vec<u8> {
-    open_internal_with_worker_local(&open_in, worker_local)
+    let open_argv = handle_sys_session::deserialize_open_param(&open_in)
+        .unwrap_or_else(|e| panic!("worker-local open is not available: {}", e));
+    let worker_local = require_worker_local(worker_local)
         .unwrap_or_else(|e| panic!("worker-local open is not available: {}", e))
+        .clone();
+    let opened = worker_local
+        .open_argv_async(open_argv.worker_oid())
+        .await
+        .unwrap_or_else(|e| panic!("worker-local open is not available: {}", e));
+    handle_sys_session::serialize_open_result(opened)
 }
 
 pub async fn async_close_internal_with_worker_local(
     close_in: Vec<u8>,
     worker_local: Option<&WorkerLocalRef>,
 ) -> Vec<u8> {
-    close_internal_with_worker_local(&close_in, worker_local)
+    let session_id: OID = handle_sys_session::deserialize_close_param(&close_in)
+        .unwrap_or_else(|e| panic!("worker-local close is not available: {}", e));
+    let worker_local = require_worker_local(worker_local)
         .unwrap_or_else(|e| panic!("worker-local close is not available: {}", e))
+        .clone();
+    worker_local
+        .close_async(session_id)
+        .await
+        .unwrap_or_else(|e| panic!("worker-local close is not available: {}", e));
+    handle_sys_session::serialize_close_result()
 }
 
 pub async fn async_put_internal(put_in: Vec<u8>) -> Vec<u8> {
@@ -222,8 +262,36 @@ pub async fn async_put_internal_with_worker_local(
     put_in: Vec<u8>,
     worker_local: Option<&WorkerLocalRef>,
 ) -> Vec<u8> {
-    put_internal_with_worker_local(&put_in, worker_local)
+    let (session_id, key, value) = handle_sys_session::deserialize_session_put_param(&put_in)
+        .unwrap_or_else(|e| panic!("worker-local put is not available: {}", e));
+    let worker_local = require_worker_local(worker_local)
         .unwrap_or_else(|e| panic!("worker-local put is not available: {}", e))
+        .clone();
+    worker_local
+        .put_async(session_id, key, value)
+        .await
+        .unwrap_or_else(|e| panic!("worker-local put is not available: {}", e));
+    handle_sys_session::serialize_put_result()
+}
+
+pub async fn async_delete_internal(delete_in: Vec<u8>) -> Vec<u8> {
+    delete_internal(&delete_in)
+}
+
+pub async fn async_delete_internal_with_worker_local(
+    delete_in: Vec<u8>,
+    worker_local: Option<&WorkerLocalRef>,
+) -> Vec<u8> {
+    let (session_id, key) = handle_sys_session::deserialize_session_delete_param(&delete_in)
+        .unwrap_or_else(|e| panic!("worker-local delete is not available: {}", e));
+    let worker_local = require_worker_local(worker_local)
+        .unwrap_or_else(|e| panic!("worker-local delete is not available: {}", e))
+        .clone();
+    worker_local
+        .delete_async(session_id, &key)
+        .await
+        .unwrap_or_else(|e| panic!("worker-local delete is not available: {}", e));
+    handle_sys_session::serialize_delete_result()
 }
 
 pub async fn async_range_internal(range_in: Vec<u8>) -> Vec<u8> {
@@ -234,8 +302,19 @@ pub async fn async_range_internal_with_worker_local(
     range_in: Vec<u8>,
     worker_local: Option<&WorkerLocalRef>,
 ) -> Vec<u8> {
-    range_internal_with_worker_local(&range_in, worker_local)
+    let (session_id, start, end) = handle_sys_session::deserialize_session_range_param(&range_in)
+        .unwrap_or_else(|e| panic!("worker-local range is not available: {}", e));
+    let worker_local = require_worker_local(worker_local)
         .unwrap_or_else(|e| panic!("worker-local range is not available: {}", e))
+        .clone();
+    let rows = worker_local
+        .range_async(session_id, &start, &end)
+        .await
+        .unwrap_or_else(|e| panic!("worker-local range is not available: {}", e))
+        .into_iter()
+        .map(|item| (item.key, item.value))
+        .collect::<Vec<_>>();
+    handle_sys_session::serialize_range_result(&rows)
 }
 
 fn require_worker_local(worker_local: Option<&WorkerLocalRef>) -> RS<&WorkerLocalRef> {
@@ -269,5 +348,24 @@ mod tests {
             err.to_string()
                 .contains("worker local interface is not configured")
         );
+
+        let delete = handle_sys_session::serialize_session_delete_param(1, b"alpha");
+        let err = delete_internal_with_worker_local(&delete, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("worker local interface is not configured")
+        );
+    }
+
+    #[test]
+    fn delete_session_codec_round_trips() {
+        let encoded = handle_sys_session::serialize_session_delete_param(9, b"alpha");
+        let decoded = handle_sys_session::deserialize_session_delete_param(&encoded).unwrap();
+        assert_eq!(decoded.0, 9);
+        assert_eq!(decoded.1, b"alpha".to_vec());
+        handle_sys_session::deserialize_delete_result(
+            &handle_sys_session::serialize_delete_result(),
+        )
+        .unwrap();
     }
 }

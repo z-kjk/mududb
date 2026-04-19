@@ -3,18 +3,13 @@ pub mod attr_value;
 pub mod context;
 pub mod db_conn;
 pub mod entity;
-pub mod filter;
-pub mod predicate;
-pub mod project;
 pub mod sql;
 pub mod sql_stmt;
-pub mod table;
 
 pub mod attr_field_access;
 mod db_context;
 pub mod entity_set;
 pub mod entity_utils;
-pub mod err_no;
 pub mod prepared_stmt;
 pub mod result_batch;
 pub mod result_set;

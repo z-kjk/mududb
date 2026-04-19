@@ -7,6 +7,8 @@ lazy_static! {
     static ref _id_lang_type_name: Vec<(DatTypeID, &'static str)> = vec![
         (DatTypeID::I32, "i32"),
         (DatTypeID::I64, "i64"),
+        (DatTypeID::I128, "i128"),
+        (DatTypeID::U128, "OID"),
         (DatTypeID::F32, "f32"),
         (DatTypeID::F64, "f64"),
         (DatTypeID::String, "String"),
@@ -16,8 +18,11 @@ lazy_static! {
     ];
     static ref _id2name: HashMap<DatTypeID, String> =
         dat_type_id_2_lang_type_name(&_id_lang_type_name);
-    static ref _name2id: HashMap<String, (DatTypeID, Vec<DatTypeID>)> =
-        lang_type_name_2_dat_type_id(&_id_lang_type_name);
+    static ref _name2id: HashMap<String, (DatTypeID, Vec<DatTypeID>)> = {
+        let mut map = lang_type_name_2_dat_type_id(&_id_lang_type_name);
+        map.insert("u128".to_string(), (DatTypeID::U128, Default::default()));
+        map
+    };
 }
 
 pub fn dt_lang_name_to_id(name: &str) -> Option<(DatTypeID, Vec<DatTypeID>)> {
