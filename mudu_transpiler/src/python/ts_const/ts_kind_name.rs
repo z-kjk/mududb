@@ -1,0 +1,17 @@
+pub const S_MODULE: &str = "module";
+pub const S_COMMENT: &str = "comment";
+pub const S_FUNCTION_DEFINITION: &str = "function_definition";
+pub const S_IDENTIFIER: &str = "identifier";
+pub const S_GENERIC_TYPE: &str = "generic_type";
+pub const S_PARAMETERS: &str = "parameters";
+pub const S_TYPE_PARAMETER: &str = "type_parameter";
+pub const S_TYPED_PARAMETER: &str = "typed_parameter";
+pub const S_TYPE: &str = "type";
+pub const S_BLOCK: &str = "block";
+pub const S_RETURN_STATEMENT: &str = "return_statement";
+pub const S_CALL: &str = "call";
+pub const S_ATTRIBUTE: &str = "attribute";
+pub const S_ARGUMENT_LIST: &str = "argument_list";
+pub const S_STRING: &str = "string";
+pub const S_ASYNC: &str = "async";
+pub const S_DEF: &str = "def";

@@ -1,5 +1,5 @@
-use crate::python::py_function::PyFunction;
-use crate::python::template_proc::{ArgumentInfo, ProcedureInfo, ReturnInfo, TemplateProc};
+use crate::python::function::PyFunction;
+use crate::python::tymplate_proc::{ArgumentInfo, ProcedureInfo, ReturnInfo, TemplateProc};
 use askama::Template;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
@@ -27,13 +27,22 @@ pub struct ParseContext {
     /// callee key -> caller value
     pub call_dependencies: HashMap<String, HashSet<String>>,
     pub position_call_end: HashMap<String, Vec<(Position, bool)>>,
-    pub position_fn_start: HashMap<String, (Position, bool)>,
-    pub mudu_procedure: HashMap<String, Function>,
+    pub position_def_start: HashMap<String, (Position, bool)>,
+    pub mudu_procedure: HashMap<String, PyFunction>,
     pub position_refactor_use: Vec<UseRefactor>,
     pub lines: Vec<String>,
     pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
 }
 
+
+impl ParseContext {
+    pub fn node_text(&self, node: &Node) -> RS<String> {
+        let s = node
+            .utf8_text(self.text.as_bytes())
+            .map_err(|e| m_error!(EC::DecodeErr, "decode utf8 error", e))?;
+        Ok(s.to_string())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Position {

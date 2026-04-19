@@ -1,6 +1,7 @@
 mod mtp;
 mod rust;
 mod test_mtp;
+mod python;
 
 use crate::mtp::main_inner;
 use std::error::Error;

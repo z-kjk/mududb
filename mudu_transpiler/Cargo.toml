@@ -17,6 +17,8 @@ sql_parser = {workspace = true}
 tree-sitter = {workspace = true}
 mudu_type = { workspace = true }
 
+tree-sitter-python = { version = "0.25.0" }
+
 
 [build-dependencies]
 askama = { workspace = true }

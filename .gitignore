@@ -28,3 +28,5 @@ target*
 .venv
 **/__pycache__/
 *.py[cod]
+
+./mudu_transpiler/src/rust
