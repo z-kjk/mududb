@@ -42,6 +42,41 @@ impl ParseContext {
             .map_err(|e| m_error!(EC::DecodeErr, "decode utf8 error", e))?;
         Ok(s.to_string())
     }
+
+    pub fn is_sys_call(&self, name: &str) -> bool {
+        self.sys_call.contains(name)
+    }
+
+    pub fn add_func_call_end_position(
+        &mut self,
+        fn_name: String,
+        end_position: Position,
+        sys_call: bool,
+    ) {
+        let opt = self.position_call_end.get_mut(&fn_name);
+        if let Some(vec) = opt {
+            vec.push((end_position, sys_call));
+        } else {
+            self.position_call_end
+                .insert(fn_name, vec![(end_position, sys_call)]);
+        }
+    }
+
+    pub fn add_call_dependency(&mut self, caller: &str, callee: &str) {
+        if let Some(set) = self.call_dependencies.get_mut(callee) {
+            set.insert(caller.to_string());
+        } else {
+            // 用 caller.to_string() 构建初始的 Vec，这样生成的就是 HashSet<String>
+            let caller_set = HashSet::from_iter(vec![caller.to_string()]);
+
+            // 或者更现代/简洁的写法是直接使用 HashSet::from:
+            // let caller_set = HashSet::from([caller.to_string()]);
+
+            self.call_dependencies.insert(callee.to_string(), caller_set);
+        }
+    }
+
+
 }
 
 #[derive(Debug, Clone)]

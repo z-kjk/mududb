@@ -24,6 +24,17 @@ fn rust_language() -> Language {
     tree_sitter_python::LANGUAGE.into()
 }
 
+//主要节点
+#[derive(Debug)]
+struct CallArguments {
+    text: String,
+    end_position: Position, //结束位置，可用于代码自动修改与重构
+}
+
+#[derive(Debug)]
+struct CallIdentifier {
+    name: String,
+}
 
 impl PythonParser {
     fn new() -> PythonParser {
@@ -144,12 +155,6 @@ impl PythonParser {
         Ok(())
     }
 
-    //todo 函数调用
-    ///负责，从call里取
-    /// function、arguments
-    fn visit_call(&self, context: &mut ParseContext, node: Node, opt_function_name: Option<&str>) -> RS<()>{
-        Ok(())
-    }
 
     ///遍历函数参数列表
     fn visit_parameters(
@@ -276,12 +281,125 @@ impl PythonParser {
     }
 
     ///解析返回类型
-    //todo 待补充吧
     fn visit_return_type(&self, context: &ParseContext, node: Node) -> RS<PythonType> {
         self.visit_type(context, node)
     }
 
+    ///创建call_chains，遍历数据，将依赖关系（谁调用了谁）和调用的结束位置写入ParseContext
+    fn visit_call(&self, context: &mut ParseContext, node: Node, opt_function_name: Option<&str>) -> RS<()>{
+        let mut call_chains = Vec::new(); //定义一个空的数组
+        self.visit_call_inner(context, node, &mut call_chains)?;
 
+        //遍历收集结果
+        if let Some(caller) = opt_function_name {
+            for (identifier, arguments) in call_chains.iter() {
+                context.add_call_dependency(caller, &identifier.name);
+
+                let is_sys_call = context.is_sys_call(&identifier.name);
+                context.add_func_call_end_position(
+                    identifier.name.clone(),
+                    arguments.end_position.clone(),
+                    is_sys_call,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn visit_call_inner(
+        &self,
+        context: &ParseContext,
+        node: Node,
+        call_chains: &mut Vec<(CallIdentifier, CallArguments)>,
+    ) -> RS<()> {
+        match node.kind() {
+            //如果是call节点
+            ts_const::ts_kind_name::S_CALL => {
+                // 1. 获取被调用的函数节点
+                let function = expected_child_field(&node, ts_const::ts_field_name::FUNCTION)?;
+                let opt_identifier = self.visit_function(context, function)?;
+
+                // 2. 如果成功解析出函数标识符，继续解析参数
+                if let Some(identifier) = opt_identifier {
+                    let arguments =
+                        expected_child_field(&node, ts_const::ts_field_name::ARGUMENTS)?;
+                    let call_arguments = self.visit_call_arguments(context, arguments)?;
+                    call_chains.push((identifier, call_arguments))
+                }
+            }
+            _ => {}
+        }
+
+        // 递归遍历所有子节点，这样能抓到类似 foo(bar()) 里的 bar()，防止嵌套调用遗漏
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.visit_call_inner(context, child, call_chains)?;
+        }
+        Ok(())
+    }
+
+    //记录“被调用函数名”格式
+    fn visit_function_inner(
+        &self,
+        context: &ParseContext,
+        node: Node,
+    ) -> RS<Option<CallIdentifier>> {
+        let kind = node.kind();
+        match kind {
+            // 1. 普通的函数调用，例如 fetch() -> 提取出 "fetch"
+            ts_const::ts_kind_name::S_IDENTIFIER => {
+                let name = context.node_text(&node)?;
+                Ok(Some(CallIdentifier { name }))
+            }
+
+            // 2. Python 里的对象方法调用，例如 client.get()
+            // 它的 function 节点就是 attribute 节点
+            ts_const::ts_kind_name::S_ATTRIBUTE => {
+                // 直接精准取出最后的方法名 (get)
+                if let Some(attr_node) = node.child_by_field_name(ts_const::ts_field_name::ATTRIBUTE) {
+                    self.visit_function_inner(context, attr_node)
+                } else {
+                    Ok(None)
+                }
+            }
+
+            // 3. 兜底逻辑：例如 foo()() 这种嵌套情况，或者其他复杂的调用表达式
+            // 从后往前找，找到最右边的标识符
+            _ => {
+                let count = node.child_count();
+                for i in 0..count {
+                    // 修正了 Rust 原版的索引小瑕疵，正确倒序：count - 1, count - 2 ... 0
+                    let n = count - 1 - i;
+
+                    // 将n强转为u32类型，因为不会超过
+                    if let Some(c) = node.child(n as u32) {
+                        let opt_ident = self.visit_function_inner(context, c)?;
+                        if opt_ident.is_some() {
+                            return Ok(opt_ident);
+                        }
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn visit_function(&self, context: &ParseContext, node: Node) -> RS<Option<CallIdentifier>> {
+        self.visit_function_inner(context, node)
+    }
+
+    //提取参数信息
+    fn visit_call_arguments(&self, context: &ParseContext, node: Node) -> RS<CallArguments> {
+        let text = context.node_text(&node)?;
+        let pos = Position::from_ts(node.end_position());
+        Ok(CallArguments {
+            text,
+            end_position: pos,
+        })
+    }
+    //todo 检查是否包含系统/内置调用
+    //fn visit_sub_check_is_sys_call(&self, context: &mut ParseContext, node: Node) -> RS<bool> {
 }
 //期待field存在
 fn expected_child_field<'tree>(node: &Node<'tree>, field: &str) -> RS<Node<'tree>> {
