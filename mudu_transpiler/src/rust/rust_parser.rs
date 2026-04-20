@@ -273,7 +273,7 @@ impl RustParser {
         Ok(())
     }
 
-    fn visit_function_item(&self, context: &mut ParseContext, node: Node) -> RS<()> {
+    fn visit_function_item(&self, context: &mut ParseContext, node: Node) -> RS<()> { //解析一个rust函数定义
         let mut cursor = node.walk();
         let mut contains_async = false;
         let mut fn_start_pos = None;
@@ -331,7 +331,7 @@ impl RustParser {
         let mut cursor = node.walk();
         let mut vec = Vec::new();
         for child in node.children(&mut cursor) {
-            if child.kind() == ts_const::ts_kind_name::S_PARAMETER {
+            if child.kind() == ts_const::ts_kind_name::S_PARAMETER { //找子节点为参数节点的进行分析
                 let (name, ty) = self.visit_parameter(parse_context, child)?;
                 vec.push((name, ty));
             }

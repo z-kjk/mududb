@@ -8,10 +8,10 @@ use mudu_type::dtp_array::DTPArray;
 
 #[derive(Debug, Clone)]
 pub enum RustType {
-    Primitive(String),
-    Tuple(Vec<RustType>),
-    Custom(String),
-    Generic(String, Vec<RustType>),
+    Primitive(String), //原生类型
+    Tuple(Vec<RustType>), //元组类型
+    Custom(String), //自定义类型,自定义struct
+    Generic(String, Vec<RustType>), //泛型，泛型容器名，泛型参数列表
 }
 
 impl RustType {
@@ -24,7 +24,7 @@ impl RustType {
         }
     }
 
-    pub fn as_ret_type(&self) -> Vec<RustType> {
+    pub fn as_ret_type(&self) -> Vec<RustType> { //判断类型，将内容提取并进行处理
         match self {
             RustType::Generic(_, vec) => {
                 if vec.len() != 1 {
