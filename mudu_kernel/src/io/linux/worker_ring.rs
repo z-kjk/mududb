@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
+use mudu_utils::task::try_this_task_id;
+use mudu_utils::task_id::TaskID;
 
 use crate::io::file::{complete_file_io, submit_file_io, FileInflightOp, FileIoRequest};
 use crate::io::socket::{complete_socket_io, submit_socket_io, SocketInflightOp, SocketIoRequest};
@@ -26,11 +28,28 @@ pub(crate) enum UserIoInflight {
     Socket { op_id: u64, op: SocketInflightOp },
 }
 
+impl UserIoInflight {
+    pub(crate) fn op_id(&self) -> u64 {
+        match self {
+            Self::File { op_id, .. } => *op_id,
+            Self::Socket { op_id, .. } => *op_id,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::File { .. } => "file",
+            Self::Socket { .. } => "socket",
+        }
+    }
+}
+
 pub(crate) struct WorkerLocalRing {
     worker_tasks: WorkerTaskRegistry,
     next_op_id: AtomicU64,
     pending: Mutex<VecDeque<u64>>,
     ops: Mutex<HashMap<u64, WorkerRingOp>>,
+    op_tasks: Mutex<HashMap<u64, TaskID>>,
 }
 
 impl WorkerLocalRing {
@@ -40,6 +59,7 @@ impl WorkerLocalRing {
             next_op_id: AtomicU64::new(1),
             pending: Mutex::new(VecDeque::new()),
             ops: Mutex::new(HashMap::new()),
+            op_tasks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -53,6 +73,12 @@ impl WorkerLocalRing {
             .lock()
             .map_err(|_| m_error!(EC::InternalErr, "worker local ring lock poisoned"))?
             .insert(op_id, op);
+        if let Some(task_id) = try_this_task_id() {
+            self.op_tasks
+                .lock()
+                .map_err(|_| m_error!(EC::InternalErr, "worker local ring lock poisoned"))?
+                .insert(op_id, task_id);
+        }
         self.pending
             .lock()
             .map_err(|_| m_error!(EC::InternalErr, "worker local ring lock poisoned"))?
@@ -93,6 +119,16 @@ impl WorkerLocalRing {
                 )
             })?;
         Ok(Some((op_id, op)))
+    }
+
+    pub(crate) fn task_for_op(&self, op_id: u64) -> Option<TaskID> {
+        self.op_tasks.lock().ok()?.get(&op_id).copied()
+    }
+
+    pub(crate) fn finish_op(&self, op_id: u64) {
+        if let Ok(mut guard) = self.op_tasks.lock() {
+            guard.remove(&op_id);
+        }
     }
 }
 
@@ -157,8 +193,14 @@ pub(crate) fn complete_user_ring_op(
     result: i32,
     ring: &WorkerLocalRing,
 ) -> RS<()> {
-    match op {
-        UserIoInflight::File { op_id, op } => complete_file_io(op_id, op, result, ring),
-        UserIoInflight::Socket { op_id, op } => complete_socket_io(op_id, op, result, ring),
+    let (op_id, done) = match op {
+        UserIoInflight::File { op_id, op } => (op_id, complete_file_io(op_id, op, result, ring)?),
+        UserIoInflight::Socket { op_id, op } => {
+            (op_id, complete_socket_io(op_id, op, result, ring)?)
+        }
+    };
+    if done {
+        ring.finish_op(op_id);
     }
+    Ok(())
 }

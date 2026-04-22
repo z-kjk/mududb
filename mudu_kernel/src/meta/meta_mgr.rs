@@ -35,19 +35,31 @@ use crate::meta::schema_catalog::{
 use crate::storage::relation::relation::Relation;
 
 type MetaMgrRegistry = HashMap<String, Vec<Weak<MetaMgrImpl>>>;
+type DdlLockRegistry = HashMap<String, Weak<tokio::sync::Mutex<()>>>;
 
 fn registry() -> &'static StdMutex<MetaMgrRegistry> {
     static REGISTRY: OnceLock<StdMutex<MetaMgrRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-fn ddl_lock() -> &'static tokio::sync::Mutex<()> {
-    static DDL_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    DDL_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+fn ddl_lock_registry() -> &'static StdMutex<DdlLockRegistry> {
+    static DDL_LOCKS: OnceLock<StdMutex<DdlLockRegistry>> = OnceLock::new();
+    DDL_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn ddl_lock_for(path: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut guard = ddl_lock_registry().lock().unwrap();
+    if let Some(existing) = guard.get(path).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let created = Arc::new(tokio::sync::Mutex::new(()));
+    let _ = guard.insert(path.to_string(), Arc::downgrade(&created));
+    created
 }
 
 pub struct MetaMgrImpl {
     path: String,
+    ddl_lock: Arc<tokio::sync::Mutex<()>>,
     schema_catalog: Relation,
     partition_rule_catalog: Relation,
     partition_binding_catalog: Relation,
@@ -70,12 +82,14 @@ impl MetaMgrImpl {
         }
 
         let path_string = path.to_string_lossy().to_string();
+        let ddl_lock = ddl_lock_for(&path_string);
         let schema_catalog = open_schema_catalog(&path_string)?;
         let partition_rule_catalog = open_partition_rule_catalog(&path_string)?;
         let partition_binding_catalog = open_partition_binding_catalog(&path_string)?;
         let partition_placement_catalog = open_partition_placement_catalog(&path_string)?;
         let this = Self {
             path: path_string,
+            ddl_lock,
             schema_catalog,
             partition_rule_catalog,
             partition_binding_catalog,
@@ -98,7 +112,8 @@ impl MetaMgrImpl {
         for binding in load_partition_bindings_from_catalog(&this.partition_binding_catalog)? {
             this.apply_bind_table_partition_local(&binding);
         }
-        for placement in load_partition_placements_from_catalog(&this.partition_placement_catalog)? {
+        for placement in load_partition_placements_from_catalog(&this.partition_placement_catalog)?
+        {
             this.apply_partition_placement_local(&placement);
         }
         Ok(this)
@@ -137,7 +152,9 @@ impl MetaMgrImpl {
     }
 
     pub fn lookup_partition_rule_by_id(&self, oid: OID) -> Option<PartitionRuleDesc> {
-        self.rule_by_id.get_sync(&oid).map(|entry| entry.get().clone())
+        self.rule_by_id
+            .get_sync(&oid)
+            .map(|entry| entry.get().clone())
     }
 
     pub fn lookup_partition_rule_by_name(&self, name: &str) -> Option<PartitionRuleDesc> {
@@ -176,7 +193,7 @@ impl MetaMgrImpl {
     }
 
     pub async fn create_table_inner(&self, schema: &SchemaTable) -> RS<()> {
-        let _ddl_guard = ddl_lock().lock().await;
+        let _ddl_guard = self.ddl_lock.lock().await;
         if self.table.contains_sync(schema.table_name()) {
             return Err(m_error!(ER::ExistingSuchElement, ""));
         }
@@ -186,7 +203,7 @@ impl MetaMgrImpl {
     }
 
     pub async fn drop_table_inner(&self, oid: OID) -> RS<()> {
-        let _ddl_guard = ddl_lock().lock().await;
+        let _ddl_guard = self.ddl_lock.lock().await;
         let table = self
             .lookup_table_info_by_id(oid)
             .ok_or_else(|| m_error!(ER::NoSuchElement, format!("no such table {}", oid)))?;
@@ -196,7 +213,7 @@ impl MetaMgrImpl {
     }
 
     pub async fn create_partition_rule_inner(&self, rule: &PartitionRuleDesc) -> RS<()> {
-        let _ddl_guard = ddl_lock().lock().await;
+        let _ddl_guard = self.ddl_lock.lock().await;
         if self.rule_name2id.contains_sync(&rule.name) {
             return Err(m_error!(
                 ER::ExistingSuchElement,
@@ -213,7 +230,7 @@ impl MetaMgrImpl {
     }
 
     pub async fn bind_table_partition_inner(&self, binding: &TablePartitionBinding) -> RS<()> {
-        let _ddl_guard = ddl_lock().lock().await;
+        let _ddl_guard = self.ddl_lock.lock().await;
         if self.lookup_table_info_by_id(binding.table_id).is_none() {
             return Err(m_error!(
                 ER::NoSuchElement,
@@ -239,7 +256,7 @@ impl MetaMgrImpl {
         &self,
         placements: &[PartitionPlacement],
     ) -> RS<()> {
-        let _ddl_guard = ddl_lock().lock().await;
+        let _ddl_guard = self.ddl_lock.lock().await;
         for placement in placements {
             write_partition_placement_to_catalog(
                 &self.partition_placement_catalog,
@@ -416,9 +433,8 @@ impl MetaMgr for MetaMgrImpl {
     }
 
     async fn get_partition_rule_by_id(&self, oid: OID) -> RS<PartitionRuleDesc> {
-        self.lookup_partition_rule_by_id(oid).ok_or_else(|| {
-            m_error!(ER::NoSuchElement, format!("no such partition rule {}", oid))
-        })
+        self.lookup_partition_rule_by_id(oid)
+            .ok_or_else(|| m_error!(ER::NoSuchElement, format!("no such partition rule {}", oid)))
     }
 
     async fn get_partition_rule_by_name(&self, name: &str) -> RS<Option<PartitionRuleDesc>> {

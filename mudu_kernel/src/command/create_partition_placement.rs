@@ -33,7 +33,8 @@ impl CmdExec for CreatePartitionPlacement {
     async fn run(&self) -> RS<()> {
         task_trace!();
         let inner = self.inner.lock().await;
-        inner.meta_mgr
+        inner
+            .meta_mgr
             .upsert_partition_placements(&inner.param.placements)
             .await
     }

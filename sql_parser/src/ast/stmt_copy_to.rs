@@ -48,6 +48,9 @@ mod tests {
 
         assert_eq!(stmt.copy_to_file_path(), "'users.csv'");
         assert_eq!(stmt.copy_from_table_name(), "users");
-        assert_eq!(stmt.table_columns(), &vec!["id".to_string(), "name".to_string()]);
+        assert_eq!(
+            stmt.table_columns(),
+            &vec!["id".to_string(), "name".to_string()]
+        );
     }
 }

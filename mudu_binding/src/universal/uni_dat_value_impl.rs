@@ -1,6 +1,8 @@
 use crate::universal::uni_dat_value::UniDatValue;
 use crate::universal::uni_primitive_value::UniPrimitiveValue;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_type::dat_type_id::DatTypeID;
 use mudu_type::dat_value::DatValue;
 use mudu_type::datum::DatumDyn;
@@ -11,26 +13,26 @@ impl UniDatValue {
             UniDatValue::Primitive(value) => {
                 let v = match value {
                     UniPrimitiveValue::Bool(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive bool is not supported"));
                     }
                     UniPrimitiveValue::U8(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive u8 is not supported"));
                     }
                     UniPrimitiveValue::I8(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive i8 is not supported"));
                     }
                     UniPrimitiveValue::U16(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive u16 is not supported"));
                     }
                     UniPrimitiveValue::I16(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive i16 is not supported"));
                     }
                     UniPrimitiveValue::U32(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive u32 is not supported"));
                     }
                     UniPrimitiveValue::I32(v) => DatValue::from_i32(v),
                     UniPrimitiveValue::U64(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive u64 is not supported"));
                     }
                     UniPrimitiveValue::U128(v) => DatValue::from_u128(v),
                     UniPrimitiveValue::I64(v) => DatValue::from_i64(v),
@@ -38,7 +40,7 @@ impl UniDatValue {
                     UniPrimitiveValue::F32(v) => DatValue::from_f32(v),
                     UniPrimitiveValue::F64(v) => DatValue::from_f64(v),
                     UniPrimitiveValue::Char(_) => {
-                        unimplemented!()
+                        return Err(m_error!(EC::TypeErr, "primitive char is not supported"));
                     }
                     UniPrimitiveValue::String(v) => DatValue::from_string(v),
                 };

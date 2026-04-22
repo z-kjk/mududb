@@ -1,7 +1,5 @@
 use crate::contract::meta_mgr::MetaMgr;
-use crate::contract::partition_rule::{
-    PartitionBound, PartitionRuleDesc, RangePartitionDef,
-};
+use crate::contract::partition_rule::{PartitionBound, PartitionRuleDesc, RangePartitionDef};
 use crate::contract::partition_rule_binding::{PartitionPlacement, TablePartitionBinding};
 use crate::contract::schema_column::SchemaColumn;
 use crate::contract::schema_table::SchemaTable;
@@ -10,7 +8,7 @@ use crate::executor::project_tuple_desc;
 use crate::sql::bound_stmt::{
     BoundCommand, BoundCopyFrom, BoundCopyTo, BoundCreatePartitionPlacement,
     BoundCreatePartitionRule, BoundCreateTable, BoundDelete, BoundDropTable, BoundInsert,
-    BoundPredicate, BoundQuery, BoundSelect, BoundStmt, BoundUpdate,
+    BoundInsertRow, BoundPredicate, BoundQuery, BoundSelect, BoundStmt, BoundUpdate,
 };
 use crate::sql::copy_layout::CopyLayout;
 use crate::sql::value_codec::ValueCodec;
@@ -18,14 +16,13 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC as ER;
 use mudu::m_error;
 use mudu_contract::database::sql_params::SQLParams;
+use mudu_type::dat_type_id::DatTypeID;
 use mudu_type::dt_info::DTInfo;
 use sql_parser::ast::expr_compare::ExprCompare;
 use sql_parser::ast::expr_item::{ExprItem, ExprValue};
 use sql_parser::ast::expr_operator::ValueCompare;
 use sql_parser::ast::stmt_create_partition_placement::StmtCreatePartitionPlacement;
-use sql_parser::ast::stmt_create_partition_rule::{
-    StmtCreatePartitionRule, StmtPartitionBound,
-};
+use sql_parser::ast::stmt_create_partition_rule::{StmtCreatePartitionRule, StmtPartitionBound};
 use sql_parser::ast::stmt_create_table::StmtCreateTable;
 use sql_parser::ast::stmt_delete::StmtDelete;
 use sql_parser::ast::stmt_drop_table::StmtDropTable;
@@ -57,11 +54,11 @@ impl Binder {
 
     async fn bind_command(&self, command: StmtCommand, params: &dyn SQLParams) -> RS<BoundCommand> {
         match command {
-            StmtCommand::CreatePartitionPlacement(stmt) => Ok(
-                BoundCommand::CreatePartitionPlacement(
+            StmtCommand::CreatePartitionPlacement(stmt) => {
+                Ok(BoundCommand::CreatePartitionPlacement(
                     self.bind_create_partition_placement(stmt).await?,
-                ),
-            ),
+                ))
+            }
             StmtCommand::CreatePartitionRule(stmt) => Ok(BoundCommand::CreatePartitionRule(
                 self.bind_create_partition_rule(stmt)?,
             )),
@@ -127,10 +124,16 @@ impl Binder {
             .map(|index| index + value_offset)
             .collect();
         columns.append(&mut value_columns);
-        let schema = SchemaTable::new(stmt.table_name().clone(), columns, key_indices, value_indices);
+        let schema = SchemaTable::new(
+            stmt.table_name().clone(),
+            columns,
+            key_indices,
+            value_indices,
+        );
         let partition_binding = if let Some(partition) = stmt.partition() {
             let rule = futures::executor::block_on(
-                self.meta_mgr.get_partition_rule_by_name(partition.rule_name()),
+                self.meta_mgr
+                    .get_partition_rule_by_name(partition.rule_name()),
             )?
             .ok_or_else(|| {
                 m_error!(
@@ -190,8 +193,55 @@ impl Binder {
             })
             .collect::<RS<Vec<_>>>()?;
         Ok(BoundCreatePartitionRule {
-            rule: PartitionRuleDesc::new_range(stmt.rule_name().to_string(), Vec::new(), partitions),
+            rule: PartitionRuleDesc::new_range(
+                stmt.rule_name().to_string(),
+                Self::infer_partition_rule_key_types(stmt.partitions())?,
+                partitions,
+            ),
         })
+    }
+
+    fn infer_partition_rule_key_types(
+        partitions: &[sql_parser::ast::stmt_create_partition_rule::StmtRangePartition],
+    ) -> RS<Vec<DatTypeID>> {
+        let mut width = None;
+        let mut type_slots: Vec<InferredKeyType> = Vec::new();
+
+        for partition in partitions {
+            for bound in [partition.start(), partition.end()] {
+                let values = match bound {
+                    StmtPartitionBound::Unbounded => continue,
+                    StmtPartitionBound::Value(values) => values,
+                };
+                if let Some(expected) = width {
+                    if expected != values.len() {
+                        return Err(m_error!(
+                            ER::ParseErr,
+                            "partition bound width mismatch in CREATE PARTITION RULE"
+                        ));
+                    }
+                } else {
+                    width = Some(values.len());
+                    type_slots = vec![InferredKeyType::I64; values.len()];
+                }
+
+                for (index, raw) in values.iter().enumerate() {
+                    let next = infer_textual_value_type(raw)?;
+                    type_slots[index] = type_slots[index].merge(next);
+                }
+            }
+        }
+
+        match width {
+            Some(_) => Ok(type_slots
+                .into_iter()
+                .map(|item| item.to_dat_type_id())
+                .collect()),
+            None => Err(m_error!(
+                ER::ParseErr,
+                "cannot infer partition key types from unbounded rule"
+            )),
+        }
     }
 
     async fn bind_create_partition_placement(
@@ -253,12 +303,9 @@ impl Binder {
             .await?
         {
             Some(table_desc) => Ok(BoundDropTable {
-                table_id: table_desc.id(),
+                oid: Some(table_desc.id()),
             }),
-            None if stmt.drop_if_exists() => Err(m_error!(
-                ER::NoSuchElement,
-                "drop if exists is not implemented"
-            )),
+            None if stmt.drop_if_exists() => Ok(BoundDropTable { oid: None }),
             None => Err(m_error!(
                 ER::NoSuchElement,
                 format!("cannot find table {}", stmt.table_name())
@@ -268,12 +315,6 @@ impl Binder {
 
     async fn bind_insert(&self, stmt: StmtInsert, params: &dyn SQLParams) -> RS<BoundInsert> {
         let table_desc = self.get_table_by_name(stmt.table_name()).await?;
-        if stmt.values_list().len() != 1 {
-            return Err(m_error!(
-                ER::NotImplemented,
-                "multi-row insert is not implemented"
-            ));
-        }
 
         let columns = if stmt.columns().is_empty() {
             let total = table_desc.fields().len();
@@ -284,30 +325,36 @@ impl Binder {
             stmt.columns().clone()
         };
 
-        let values = &stmt.values_list()[0];
-        if columns.len() != values.len() {
-            return Err(m_error!(ER::IOErr, "insert column size mismatch"));
-        }
-
         let mut param_index = 0;
-        let mut key = vec![];
-        let mut value = vec![];
-        for (name, expr) in columns.iter().zip(values.iter()) {
-            let attr = self.attr_index_by_name(&table_desc, name)?;
-            let field = table_desc.get_attr(attr);
-            let binary =
-                ValueCodec::binary_from_expr(expr, field.type_desc(), params, &mut param_index)?;
-            if field.primary_index().is_some() {
-                key.push((attr, binary));
-            } else {
-                value.push((attr, binary));
+        let mut rows = Vec::with_capacity(stmt.values_list().len());
+        for values in stmt.values_list() {
+            if columns.len() != values.len() {
+                return Err(m_error!(ER::IOErr, "insert column size mismatch"));
             }
+
+            let mut key = vec![];
+            let mut value = vec![];
+            for (name, expr) in columns.iter().zip(values.iter()) {
+                let attr = self.attr_index_by_name(&table_desc, name)?;
+                let field = table_desc.get_attr(attr);
+                let binary = ValueCodec::binary_from_expr(
+                    expr,
+                    field.type_desc(),
+                    params,
+                    &mut param_index,
+                )?;
+                if field.primary_index().is_some() {
+                    key.push((attr, binary));
+                } else {
+                    value.push((attr, binary));
+                }
+            }
+            rows.push(BoundInsertRow { key, value });
         }
 
         Ok(BoundInsert {
             table_id: table_desc.id(),
-            key,
-            value,
+            rows,
         })
     }
 
@@ -564,5 +611,52 @@ impl Binder {
             .get_table_by_name(name)
             .await?
             .ok_or_else(|| m_error!(ER::NoSuchElement, format!("no such table {}", name)))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InferredKeyType {
+    I64,
+    F64,
+    String,
+}
+
+impl InferredKeyType {
+    fn merge(self, next: InferredKeyType) -> InferredKeyType {
+        use InferredKeyType::*;
+        match (self, next) {
+            (String, _) | (_, String) => String,
+            (F64, _) | (_, F64) => F64,
+            _ => I64,
+        }
+    }
+
+    fn to_dat_type_id(self) -> DatTypeID {
+        match self {
+            InferredKeyType::I64 => DatTypeID::I64,
+            InferredKeyType::F64 => DatTypeID::F64,
+            InferredKeyType::String => DatTypeID::String,
+        }
+    }
+}
+
+fn infer_textual_value_type(raw: &[u8]) -> RS<InferredKeyType> {
+    let text = String::from_utf8(raw.to_vec())
+        .map_err(|e| m_error!(ER::DecodeErr, "partition bound text is not utf8", e))?;
+    let text = strip_text_literal_quotes(text.trim());
+    if text.parse::<i64>().is_ok() {
+        return Ok(InferredKeyType::I64);
+    }
+    if text.parse::<f64>().is_ok() {
+        return Ok(InferredKeyType::F64);
+    }
+    Ok(InferredKeyType::String)
+}
+
+fn strip_text_literal_quotes(input: &str) -> String {
+    if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
+        input[1..input.len() - 1].to_string()
+    } else {
+        input.to_string()
     }
 }

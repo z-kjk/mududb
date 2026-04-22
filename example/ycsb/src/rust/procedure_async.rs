@@ -114,7 +114,9 @@ mod tests {
             assert_eq!(ycsb_read(xid, "u1".to_string()).await.unwrap(), "v3");
 
             assert_eq!(
-                ycsb_scan(xid, "u1".to_string(), "uz".to_string()).await.unwrap(),
+                ycsb_scan(xid, "u1".to_string(), "uz".to_string())
+                    .await
+                    .unwrap(),
                 vec!["user/u1=v3".to_string(), "user/u2=v2".to_string()]
             );
 

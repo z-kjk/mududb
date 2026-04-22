@@ -3,6 +3,8 @@ use crate::tuple::tuple_binary_desc::TupleBinaryDesc;
 use crate::tuple::write_value;
 use mudu::common::buf::Buf;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 
 pub fn build_tuple_into(
     vec: &[Buf],
@@ -10,13 +12,29 @@ pub fn build_tuple_into(
     tuple: &mut TupleSlice,
 ) -> RS<Result<usize, usize>> {
     if vec.len() != tuple_desc.field_count() {
-        panic!("value vector size must equal with tuple_desc field size");
+        return Err(m_error!(
+            EC::ParseErr,
+            format!(
+                "value length {} does not match tuple field count {}",
+                vec.len(),
+                tuple_desc.field_count()
+            )
+        ));
     }
     if tuple.len() < tuple_desc.min_tuple_size() {
         return Ok(Err(tuple_desc.min_tuple_size()));
     }
     let mut offset = tuple_desc.meta_size();
-    assert!(offset <= tuple.len());
+    if offset > tuple.len() {
+        return Err(m_error!(
+            EC::TupleErr,
+            format!(
+                "tuple meta size {} exceeds tuple len {}",
+                offset,
+                tuple.len()
+            )
+        ));
+    }
     for (i, v) in vec.iter().enumerate() {
         let field = tuple_desc.get_field_desc(i);
         let r = write_value::write_value_to_tuple(field, offset, v, tuple)?;
@@ -36,13 +54,36 @@ pub fn build_tuple(vec: &Vec<Buf>, tuple_desc: &TupleBinaryDesc) -> RS<TupleBina
     let mut tuple = vec![0; tuple_desc.min_tuple_size()];
     tuple.resize(tuple_desc.min_tuple_size(), 0);
     if vec.len() != tuple_desc.field_count() {
-        panic!("value vector size must equal with tuple_desc field size");
+        return Err(m_error!(
+            EC::ParseErr,
+            format!(
+                "value length {} does not match tuple field count {}",
+                vec.len(),
+                tuple_desc.field_count()
+            )
+        ));
     }
     if tuple.len() < tuple_desc.min_tuple_size() {
-        panic!("low buffer capacity");
+        return Err(m_error!(
+            EC::InsufficientBufferSpace,
+            format!(
+                "tuple buffer size {} is less than {}",
+                tuple.len(),
+                tuple_desc.min_tuple_size()
+            )
+        ));
     }
     let mut offset = tuple_desc.meta_size();
-    assert!(offset <= tuple.len());
+    if offset > tuple.len() {
+        return Err(m_error!(
+            EC::TupleErr,
+            format!(
+                "tuple meta size {} exceeds tuple len {}",
+                offset,
+                tuple.len()
+            )
+        ));
+    }
     for (i, v) in vec.iter().enumerate() {
         let field = tuple_desc.get_field_desc(i);
         let size = loop {
@@ -65,6 +106,9 @@ pub fn build_tuple(vec: &Vec<Buf>, tuple_desc: &TupleBinaryDesc) -> RS<TupleBina
 mod tests {
     use super::{build_tuple, build_tuple_into};
     use crate::tuple::tuple_binary_desc::TupleBinaryDesc;
+    use mudu::error::ec::EC;
+    use mudu_type::dat_type::DatType;
+    use mudu_type::dat_type_id::DatTypeID;
 
     #[test]
     fn zero_field_tuple_is_allowed() {
@@ -76,5 +120,12 @@ mod tests {
         let mut into_buf = Vec::new();
         let result = build_tuple_into(&[], &desc, &mut into_buf).unwrap();
         assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn build_tuple_rejects_mismatched_field_count() {
+        let desc = TupleBinaryDesc::from(vec![DatType::new_no_param(DatTypeID::I32)]).unwrap();
+        let err = build_tuple(&Vec::new(), &desc).unwrap_err();
+        assert_eq!(err.ec(), EC::ParseErr);
     }
 }

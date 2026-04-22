@@ -1,4 +1,3 @@
 pub mod btree;
 pub mod hash;
 pub mod index_key;
-pub mod ordered_index;

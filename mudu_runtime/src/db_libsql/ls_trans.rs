@@ -173,7 +173,13 @@ fn libsql_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleValue>
                 DatValue::from_string(val)
             }
             _ => {
-                panic!("unsupported type {:?}", desc);
+                return Err(m_error!(
+                    EC::TypeErr,
+                    format!(
+                        "libsql unsupported type in sync result conversion: {:?}",
+                        desc
+                    )
+                ));
             }
         };
 

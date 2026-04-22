@@ -8,8 +8,8 @@ use crate::server::session_bound_worker_runtime::{
     as_worker_local_ref, new_session_bound_worker_runtime,
 };
 use crate::server::worker_local::{
-    WorkerExecute, WorkerLocalRef, set_current_worker_local, try_current_worker_local,
-    unset_current_worker_local,
+    set_current_worker_local, try_current_worker_local, unset_current_worker_local, WorkerExecute,
+    WorkerLocalRef,
 };
 use crate::server::worker_registry::{WorkerIdentity, WorkerRegistry};
 use crate::server::worker_session_manager::{SessionContext, WorkerSessionManager};
@@ -118,7 +118,7 @@ impl IoUringWorker {
             default_unpartitioned_worker_id,
             partition_id,
             data_dir,
-        ));
+        )?);
         let session_manager = Arc::new(WorkerSessionManager::new(
             active_sessions,
             contract.meta_mgr(),
@@ -1008,11 +1008,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn worker_storage_uses_worker_partition_id_for_relation_files() {
+    async fn worker_storage_uses_partition_zero_for_unpartitioned_relation_files() {
         let (log_dir, registry) = test_registry(1);
         let identity = registry.worker(0).cloned().unwrap();
         let worker_id = identity.worker_id;
-        let partition_id = identity.partition_ids[0];
+        let worker_partition_id = identity.partition_ids[0];
         let _worker = IoUringWorker::new(
             identity,
             1,
@@ -1029,9 +1029,10 @@ mod tests {
             None,
             worker_id,
             worker_id,
-            partition_id,
+            worker_partition_id,
             log_dir.clone(),
-        );
+        )
+        .unwrap();
         let schema = test_schema();
         let table_id = schema.id();
         let tx_mgr = contract.begin_tx().await.unwrap();
@@ -1041,8 +1042,8 @@ mod tests {
             .unwrap();
         contract.commit_tx(tx_mgr).await.unwrap();
 
-        let key_path = TimeSeriesFile::relation_file_path(&log_dir, partition_id, table_id, 0);
-        let value_path = TimeSeriesFile::relation_file_path(&log_dir, partition_id, table_id, 1);
+        let key_path = TimeSeriesFile::relation_file_path(&log_dir, 0, table_id, 0);
+        let value_path = TimeSeriesFile::relation_file_path(&log_dir, 0, table_id, 1);
         assert!(
             key_path.exists(),
             "missing relation key file {:?}",

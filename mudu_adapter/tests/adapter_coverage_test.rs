@@ -15,9 +15,7 @@ fn temp_db_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "mudu_adapter_{name}_{suffix}.db"
-    ))
+    std::env::temp_dir().join(format!("mudu_adapter_{name}_{suffix}.db"))
 }
 
 fn with_connection_env<T>(value: &str, f: impl FnOnce() -> T) -> T {

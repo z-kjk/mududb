@@ -2,12 +2,13 @@ use crate::tuple::tuple_field_desc::TupleFieldDesc;
 use crate::tuple::tuple_value::TupleValue;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
+use mudu::error::err::MError;
 use mudu::m_error;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const HEADER_LEN: usize = 20;
-const MAGIC: u16 = 0x4d44;
+pub mod format;
+pub use format::latest::HEADER_LEN;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageType {
@@ -24,6 +25,24 @@ pub enum MessageType {
     ProcedureInvoke = 11,
     SessionCreate = 12,
     SessionClose = 13,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandshakeRequest {
+    /// Protocol frame versions supported by the client.
+    pub supported_versions: Vec<u32>,
+    /// Optional client capability tags.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandshakeResponse {
+    /// Negotiated protocol frame version.
+    pub selected_version: u32,
+    /// Optional server capability tags.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 impl From<MessageType> for u16 {
@@ -60,8 +79,8 @@ impl TryFrom<u16> for MessageType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameHeader {
-    magic: u16,
-    version: u16,
+    magic: u32,
+    version: u32,
     message_type: MessageType,
     flags: u16,
     request_id: u64,
@@ -158,7 +177,15 @@ pub struct ProcedureInvokeResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorResponse {
+    #[serde(default)]
+    code: u32,
+    #[serde(default)]
+    name: String,
     message: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    location: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,28 +217,11 @@ impl Frame {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(HEADER_LEN + self.payload.len());
-        out.extend_from_slice(&self.header.magic.to_be_bytes());
-        out.extend_from_slice(&self.header.version.to_be_bytes());
-        out.extend_from_slice(&u16::from(self.header.message_type).to_be_bytes());
-        out.extend_from_slice(&self.header.flags.to_be_bytes());
-        out.extend_from_slice(&self.header.request_id.to_be_bytes());
-        out.extend_from_slice(&self.header.payload_len.to_be_bytes());
-        out.extend_from_slice(&self.payload);
-        out
+        format::encode_latest(self)
     }
 
     pub fn decode(buf: &[u8]) -> RS<Self> {
-        if buf.len() < HEADER_LEN {
-            return Err(m_error!(EC::ParseErr, "frame header is incomplete"));
-        }
-        let header = FrameHeader::decode_header_bytes(&buf[..HEADER_LEN])?;
-        let payload_len = header.payload_len();
-        let total_len = HEADER_LEN + payload_len as usize;
-        if buf.len() < total_len {
-            return Err(m_error!(EC::ParseErr, "frame payload is incomplete"));
-        }
-        Self::from_parts(header, buf[HEADER_LEN..total_len].to_vec())
+        format::decode(buf)
     }
 
     pub fn header(&self) -> &FrameHeader {
@@ -230,8 +240,8 @@ impl Frame {
 impl FrameHeader {
     pub fn new(message_type: MessageType, request_id: u64, payload_len: u32) -> Self {
         Self {
-            magic: MAGIC,
-            version: 1,
+            magic: format::latest::MAGIC,
+            version: format::latest::FRAME_VERSION,
             message_type,
             flags: 0,
             request_id,
@@ -240,35 +250,14 @@ impl FrameHeader {
     }
 
     pub fn decode_header_bytes(buf: &[u8]) -> RS<Self> {
-        if buf.len() < HEADER_LEN {
-            return Err(m_error!(EC::ParseErr, "frame header is incomplete"));
-        }
-        let magic = u16::from_be_bytes([buf[0], buf[1]]);
-        if magic != MAGIC {
-            return Err(m_error!(EC::ParseErr, "invalid frame magic"));
-        }
-        let version = u16::from_be_bytes([buf[2], buf[3]]);
-        let message_type = MessageType::try_from(u16::from_be_bytes([buf[4], buf[5]]))?;
-        let flags = u16::from_be_bytes([buf[6], buf[7]]);
-        let request_id = u64::from_be_bytes([
-            buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
-        ]);
-        let payload_len = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
-        Ok(Self {
-            magic,
-            version,
-            message_type,
-            flags,
-            request_id,
-            payload_len,
-        })
+        format::decode_header_bytes(buf)
     }
 
-    pub fn magic(&self) -> u16 {
+    pub fn magic(&self) -> u32 {
         self.magic
     }
 
-    pub fn version(&self) -> u16 {
+    pub fn version(&self) -> u32 {
         self.version
     }
 
@@ -552,13 +541,61 @@ impl SessionCloseResponse {
 impl ErrorResponse {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            code: EC::InternalErr.to_u32(),
+            name: "InternalErr".to_string(),
             message: message.into(),
+            source: String::new(),
+            location: String::new(),
         }
     }
 
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn code(&self) -> u32 {
+        self.code
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn location(&self) -> &str {
+        &self.location
+    }
+
+    pub fn from_merror(error: &MError) -> Self {
+        Self {
+            code: error.ec().to_u32(),
+            name: format!("{:?}", error.ec()),
+            message: error.message().to_string(),
+            source: error.err_src().to_json_str(),
+            location: error.loc().to_string(),
+        }
+    }
+}
+
+pub fn encode_handshake_request(request_id: u64, request: &HandshakeRequest) -> RS<Vec<u8>> {
+    let payload = encode_payload(request, "encode handshake request error")?;
+    Ok(Frame::new(MessageType::Handshake, request_id, payload).encode())
+}
+
+pub fn decode_handshake_request(frame: &Frame) -> RS<HandshakeRequest> {
+    decode_payload(frame.payload(), "decode handshake request error")
+}
+
+pub fn encode_handshake_response(request_id: u64, response: &HandshakeResponse) -> RS<Vec<u8>> {
+    let payload = encode_payload(response, "encode handshake response error")?;
+    Ok(Frame::new(MessageType::Response, request_id, payload).encode())
+}
+
+pub fn decode_handshake_response(frame: &Frame) -> RS<HandshakeResponse> {
+    decode_payload(frame.payload(), "decode handshake response error")
 }
 
 pub fn encode_client_request_with_message_type(
@@ -722,6 +759,14 @@ pub fn encode_error_response(request_id: u64, message: impl Into<String>) -> RS<
     Ok(Frame::new(MessageType::Error, request_id, payload).encode())
 }
 
+pub fn encode_merror_response(request_id: u64, error: &MError) -> RS<Vec<u8>> {
+    let payload = encode_payload(
+        &ErrorResponse::from_merror(error),
+        "encode merror response error",
+    )?;
+    Ok(Frame::new(MessageType::Error, request_id, payload).encode())
+}
+
 pub fn decode_error_response(frame: &Frame) -> RS<ErrorResponse> {
     decode_payload(frame.payload(), "decode error response error")
 }
@@ -744,7 +789,7 @@ mod tests {
         let encoded = frame.encode();
         let decoded = Frame::decode(&encoded).unwrap();
 
-        assert_eq!(decoded.header().magic(), 0x4d44);
+        assert_eq!(decoded.header().magic(), 0x4D53_464D);
         assert_eq!(decoded.header().version(), 1);
         assert_eq!(
             decoded.header().message_type(),
@@ -867,7 +912,9 @@ mod tests {
                 "value".to_string(),
                 DatType::default_for(DatTypeID::String),
             )]),
-            vec![TupleValue::from(vec![DatValue::from_string("1".to_string())])],
+            vec![TupleValue::from(vec![DatValue::from_string(
+                "1".to_string(),
+            )])],
             0,
             None,
         );
@@ -922,5 +969,17 @@ mod tests {
         assert_eq!(frame.header().message_type(), MessageType::Error);
         let error = decode_error_response(&frame).unwrap();
         assert_eq!(error.message(), "boom");
+        assert_eq!(error.name(), "InternalErr");
+        assert_eq!(error.code(), EC::InternalErr.to_u32());
+    }
+
+    #[test]
+    fn merror_response_roundtrip() {
+        let err = m_error!(EC::ParseErr, "bad request");
+        let frame = Frame::decode(&encode_merror_response(42, &err).unwrap()).unwrap();
+        let error = decode_error_response(&frame).unwrap();
+        assert_eq!(error.message(), "bad request");
+        assert_eq!(error.name(), "ParseErr");
+        assert_eq!(error.code(), EC::ParseErr.to_u32());
     }
 }

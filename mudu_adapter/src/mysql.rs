@@ -326,11 +326,7 @@ pub async fn mudu_command_async(
     Ok(session.conn.affected_rows())
 }
 
-pub async fn mudu_batch_async(
-    oid: OID,
-    sql_stmt: &dyn SQLStmt,
-    params: &dyn SQLParams,
-) -> RS<u64> {
+pub async fn mudu_batch_async(oid: OID, sql_stmt: &dyn SQLStmt, params: &dyn SQLParams) -> RS<u64> {
     if params.size() != 0 {
         return Err(m_error!(
             EC::NotImplemented,

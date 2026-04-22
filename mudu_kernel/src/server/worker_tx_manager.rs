@@ -192,9 +192,7 @@ impl TxMgr for WorkerTxManager {
         ops.push(TxOp::Begin);
         ops.extend(state.log_buffer.clone());
         ops.push(TxOp::Commit);
-        XLBatch {
-            entries: vec![XLEntry { xid, ops }],
-        }
+        XLBatch::new(vec![XLEntry { xid, ops }])
     }
 }
 

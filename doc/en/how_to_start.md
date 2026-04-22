@@ -89,6 +89,8 @@ If the file does not exist, `mudud` also creates `${HOME}/.mudu/mududb_cfg.toml`
 
 ## Use MuduDB
 
+Optional reading: [`mcli` Management Interface (HTTP)](./mcli_admin.md).
+
 ### 1. Start `mudud`
 
 Before starting `mudud`, make sure the server process has a sufficiently high open-files limit. A low soft `nofile` limit such as `1024` can cause stalls or failed session setup under higher connection counts, even if your interactive shell is configured differently.
@@ -108,69 +110,117 @@ You can verify the live limit after startup with:
 cat /proc/$(pgrep -x mudud)/limits | rg 'open files'
 ```
 
-```bash
-mudud
-```
+After `mudud` is running, you can first use interactive SQL CRUD, then install and run the `wallet` example app.
 
-After `mudud` is running, you can verify the built-in key/value access first, then build and install an `.mpk` example package.
+### 2. Use mcli interactive shell for CRUD
 
-### 2. Use mcli to put/get a key
-
-Each `mcli` command creates and closes its own temporary session automatically, so you do not need to pass a `session_id`.
+Start the interactive shell:
 
 ```bash
-mcli --addr 127.0.0.1:9527 put --json '{
-  "key": "user-1",
-  "value": "value-1"
-}'
-
-mcli --addr 127.0.0.1:9527 get --json '{
-  "key": "user-1"
-}'
+mcli --addr 127.0.0.1:9527 shell --app demo
 ```
 
-The `get` command should return:
+Run a complete CRUD flow in the shell:
 
-```json
-"value-1"
+```sql
+CREATE TABLE users_demo (
+  id INT PRIMARY KEY,
+  name TEXT
+);
+
+INSERT INTO users_demo (id, name) VALUES (1, 'Alice');
+SELECT id, name FROM users_demo WHERE id = 1;
+
+UPDATE users_demo SET name = 'Alice-Updated' WHERE id = 1;
+SELECT id, name FROM users_demo WHERE id = 1;
+
+DELETE FROM users_demo WHERE id = 1;
+SELECT id, name FROM users_demo;
 ```
 
-### 3. Build, install, and use a MuduDB application
+Exit shell:
 
-#### Build the key-value `.mpk` package
+```text
+\q
+```
+
+Shell notes:
+
+- End each SQL statement with `;`.
+- Meta commands: `\q`, `\help`, `\app <name>`.
+- Query results are shown in an interactive table on TTY by default.
+
+### 3. Build, install, and use the wallet app
+
+#### Build the wallet `.mpk` package
 
 ```bash
-cd example/key-value
+cd example/wallet
 cargo make
 ```
 
 The package target is generated at:
 
 ```bash
-target/wasm32-wasip2/release/key-value.mpk
+target/wasm32-wasip2/release/wallet.mpk
 ```
 
-#### Install the `.mpk` package with mcli
+#### Install wallet with mcli
 
 ```bash
-mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
+mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/wallet.mpk
 ```
 
-#### Invoke procedures from the installed `.mpk` package
-
-Insert a record through the `kv_insert` procedure:
+After installation, verify with the HTTP management commands:
 
 ```bash
-mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_insert --json '{
-  "user_key": "user-1",
-  "value": "value-from-mpk"
+mcli --http-addr 127.0.0.1:8300 app-list
+mcli --http-addr 127.0.0.1:8300 app-detail --app wallet
+mcli --http-addr 127.0.0.1:8300 app-detail --app wallet --module wallet --proc create_user
+mcli --http-addr 127.0.0.1:8300 server-topology
+```
+
+#### Invoke wallet procedures
+
+Create two users:
+
+```bash
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc create_user --json '{
+  "user_id": 1001,
+  "name": "Alice",
+  "email": "alice@example.com"
+}'
+
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc create_user --json '{
+  "user_id": 1002,
+  "name": "Bob",
+  "email": "bob@example.com"
 }'
 ```
 
-Read it back through the `kv_read` procedure:
+Note: `app-invoke` sends the procedure call over TCP; it still needs `--http-addr` to fetch procedure metadata.
+
+Deposit and transfer:
 
 ```bash
-mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{
-  "user_key": "user-1"
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc deposit --json '{
+  "user_id": 1001,
+  "amount": 5000
 }'
+
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc transfer --json '{
+  "from_user_id": 1001,
+  "to_user_id": 1002,
+  "amount": 1200
+}'
+```
+
+Check wallet balances in shell:
+
+```bash
+mcli --addr 127.0.0.1:9527 shell --app wallet
+```
+
+```sql
+SELECT user_id, balance FROM wallets WHERE user_id IN (1001, 1002);
 ```

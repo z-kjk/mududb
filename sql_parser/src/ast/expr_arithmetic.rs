@@ -49,8 +49,8 @@ mod tests {
     use crate::ast::expr_literal::ExprLiteral;
     use crate::ast::expr_operator::Arithmetic;
     use crate::ast::expression::ExprType;
-    use std::sync::Arc;
     use mudu_type::dat_typed::DatTyped;
+    use std::sync::Arc;
 
     #[test]
     fn arithmetic_expression_preserves_operands_and_operator() {

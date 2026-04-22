@@ -4,6 +4,8 @@ use crate::server::worker_snapshot::KvItem;
 use async_trait::async_trait;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_contract::database::result_set::ResultSetAsync;
 use mudu_contract::database::sql_params::SQLParams;
 use mudu_contract::database::sql_stmt::SQLStmt;
@@ -93,14 +95,14 @@ pub(crate) fn unset_current_worker_local() {
 }
 
 #[allow(dead_code)]
-pub(crate) fn current_worker_local() -> WorkerLocalRef {
+pub(crate) fn current_worker_local() -> RS<WorkerLocalRef> {
     CURRENT_WORKER_LOCAL.with(|slot| {
         // Safety: shared reads are confined to the current thread-local slot.
         let worker_local = unsafe { &*slot.get() };
         worker_local
             .as_ref()
             .cloned()
-            .unwrap_or_else(|| panic!("current worker local is not set"))
+            .ok_or_else(|| m_error!(EC::NoneErr, "current worker local is not set"))
     })
 }
 

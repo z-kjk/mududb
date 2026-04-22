@@ -214,23 +214,47 @@ mod tests {
         let BoundStmt::Command(BoundCommand::Insert(insert)) = bound else {
             panic!("expected bound insert");
         };
-        assert_eq!(insert.key.len(), 1);
-        assert_eq!(insert.value.len(), 1);
+        assert_eq!(insert.rows.len(), 1);
+        assert_eq!(insert.rows[0].key.len(), 1);
+        assert_eq!(insert.rows[0].value.len(), 1);
     }
 
     #[tokio::test]
-    async fn bind_insert_rejects_multi_row_insert() {
-        let err = binder()
+    async fn bind_insert_accepts_multi_row_insert() {
+        let bound = binder()
             .bind(
                 parse_stmt("insert into users (id, name) values (1, 'alice'), (2, 'bob');"),
                 &(),
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(err
-            .to_string()
-            .contains("multi-row insert is not implemented"));
+        let BoundStmt::Command(BoundCommand::Insert(insert)) = bound else {
+            panic!("expected bound insert");
+        };
+        assert_eq!(insert.rows.len(), 2);
+        assert_eq!(insert.rows[0].key.len(), 1);
+        assert_eq!(insert.rows[0].value.len(), 1);
+        assert_eq!(insert.rows[1].key.len(), 1);
+        assert_eq!(insert.rows[1].value.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bind_insert_accepts_multi_row_insert_with_placeholders() {
+        let bound = binder()
+            .bind(
+                parse_stmt("insert into users (id, name) values (?, 'alice'), (?, 'bob');"),
+                &(1i32, 2i32),
+            )
+            .await
+            .unwrap();
+
+        let BoundStmt::Command(BoundCommand::Insert(insert)) = bound else {
+            panic!("expected bound insert");
+        };
+        assert_eq!(insert.rows.len(), 2);
+        assert_eq!(insert.rows[0].key.len(), 1);
+        assert_eq!(insert.rows[1].key.len(), 1);
     }
 
     #[tokio::test]

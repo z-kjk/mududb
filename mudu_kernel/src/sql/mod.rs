@@ -22,8 +22,6 @@ pub mod stmt_cmd;
 mod stmt_create_table;
 
 mod current_tx;
-mod stmt_copy_from;
-mod stmt_copy_to;
 
 mod proj_field;
 #[cfg(test)]

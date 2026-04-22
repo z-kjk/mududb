@@ -37,7 +37,10 @@ pub fn validate_order_lines(
     quantities: &[i32],
 ) -> RS<()> {
     if item_ids.is_empty() {
-        return Err(m_error!(EC::ParseErr, "new_order requires at least one item"));
+        return Err(m_error!(
+            EC::ParseErr,
+            "new_order requires at least one item"
+        ));
     }
     if item_ids.len() != supplier_warehouse_ids.len() {
         return Err(m_error!(

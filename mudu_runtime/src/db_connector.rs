@@ -72,7 +72,7 @@ impl DBConnector {
 }
 
 async fn create_mudu_conn() -> RS<DBConn> {
-    Ok(DBConn::Async(Arc::new(MuduConnAsync::new())))
+    Ok(DBConn::Async(Arc::new(MuduConnAsync::new()?)))
 }
 
 fn parse_key_value(s: &str) -> RS<(String, String)> {

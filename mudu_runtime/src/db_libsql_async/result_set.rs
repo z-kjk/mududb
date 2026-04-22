@@ -12,7 +12,7 @@ use mudu_type::dat_value::DatValue;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::debug;
 
 pub trait ResultSetLease: Send + Sync {
     fn release(self: Box<Self>);
@@ -111,7 +111,7 @@ fn libsql_db_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleVal
         let desc = &item_desc[i];
         let n = i as i32;
         let raw = row.get_value(n).unwrap();
-        info!("col={}, name={:?}, raw={:?}", n, row.column_name(n), raw);
+        debug!("col={}, name={:?}, raw={:?}", n, row.column_name(n), raw);
         let internal = match desc.dat_type_id() {
             DatTypeID::I32 => {
                 let val = row.get::<i32>(n).map_err(|e| {
@@ -162,7 +162,13 @@ fn libsql_db_row_to_tuple_item(row: Row, item_desc: &[DatumDesc]) -> RS<TupleVal
                 DatValue::from_string(val)
             }
             _ => {
-                panic!("unsupported type {:?}", desc);
+                return Err(m_error!(
+                    EC::TypeErr,
+                    format!(
+                        "libsql unsupported type in async result conversion: {:?}",
+                        desc
+                    )
+                ));
             }
         };
 

@@ -52,7 +52,11 @@ fn compare_functions_are_reflexive_and_hash_stable() {
                 Err(err) => panic!("arb value failed for {:?}: {:?}", id, err),
             };
 
-            assert!(equal(&value, &value).unwrap(), "equal is not reflexive for {:?}", id);
+            assert!(
+                equal(&value, &value).unwrap(),
+                "equal is not reflexive for {:?}",
+                id
+            );
             assert_eq!(order(&value, &value).unwrap(), Ordering::Equal);
 
             let h1 = value_hash(id, &value);
@@ -89,7 +93,11 @@ fn compare_functions_are_symmetric_and_consistent() {
 
             let left_right_equal = equal(&left, &right).unwrap();
             let right_left_equal = equal(&right, &left).unwrap();
-            assert_eq!(left_right_equal, right_left_equal, "equal symmetry failed for {:?}", id);
+            assert_eq!(
+                left_right_equal, right_left_equal,
+                "equal symmetry failed for {:?}",
+                id
+            );
 
             let left_right_order = order(&left, &right).unwrap();
             let right_left_order = order(&right, &left).unwrap();

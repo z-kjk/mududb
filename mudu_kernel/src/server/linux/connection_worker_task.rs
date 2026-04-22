@@ -1,10 +1,3 @@
-use crossbeam_queue::SegQueue;
-use mudu::common::result::RS;
-use mudu_contract::protocol::encode_error_response;
-use std::net::SocketAddr;
-use std::os::fd::RawFd;
-use std::sync::Arc;
-
 use crate::io::socket::{close, IoSocket};
 use crate::server::async_func_task::{HandleResult, SessionTransferDispatch};
 use crate::server::frame_dispatch::dispatch_frame_async;
@@ -15,6 +8,13 @@ use crate::server::worker::IoUringWorker;
 use crate::server::worker_mailbox::WorkerMailboxMsg;
 use crate::server::worker_ring_loop::WorkerRingLoop;
 use crate::server::worker_task::WorkerTaskFuture;
+use crossbeam_queue::SegQueue;
+use mudu::common::result::RS;
+use mudu_contract::protocol::encode_merror_response;
+use mudu_utils::task_trace;
+use std::net::SocketAddr;
+use std::os::fd::RawFd;
+use std::sync::Arc;
 
 pub(in crate::server) fn spawn_connection_worker_task(
     worker: IoUringWorker,
@@ -51,6 +51,7 @@ async fn run_connection_worker_task(
     remote_addr: SocketAddr,
     initial_response: Option<Vec<u8>>,
 ) -> RS<()> {
+    task_trace!();
     let r = _run_connection_worker_task(
         worker,
         mailbox_fds,
@@ -73,6 +74,7 @@ async fn _run_connection_worker_task(
     remote_addr: SocketAddr,
     initial_response: Option<Vec<u8>>,
 ) -> RS<()> {
+    task_trace!();
     let mut socket = Some(socket);
     let mut read_buf = Vec::with_capacity(8192);
 
@@ -115,7 +117,7 @@ async fn _run_connection_worker_task(
                 break;
             }
             Err(err) => {
-                let response = encode_error_response(request_id, err.to_string())?;
+                let response = encode_merror_response(request_id, &err)?;
                 write_response(socket.as_ref().unwrap(), &response).await?;
             }
         }

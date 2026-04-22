@@ -3,6 +3,8 @@ use crate::contract::schema_table::SchemaTable;
 use crate::contract::table_desc::TableDesc;
 use mudu::common::id::{AttrIndex, OID};
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_contract::tuple::tuple_binary_desc::TupleBinaryDesc as TupleDesc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,7 +65,14 @@ impl TableInner {
         let (key_tuple_desc, key_tuple_payload_info) = table_schema.key_tuple_desc()?;
         let (value_tuple_desc, value_tuple_payload_info) = table_schema.value_tuple_desc()?;
         if value_tuple_desc.field_count() != value_tuple_payload_info.len() {
-            panic!("field describe length mismatch");
+            return Err(m_error!(
+                EC::DecodeErr,
+                format!(
+                    "field describe length mismatch: desc={} payload={}",
+                    value_tuple_desc.field_count(),
+                    value_tuple_payload_info.len()
+                )
+            ));
         }
         let mut name2oid = HashMap::new();
         let mut oid2column = HashMap::new();

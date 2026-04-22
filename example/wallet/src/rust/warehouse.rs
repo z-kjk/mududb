@@ -158,7 +158,7 @@ pub mod object {
         }
     }
 
-impl DatumDyn for Warehouse {
+    impl DatumDyn for Warehouse {
         fn dat_type_id(&self) -> RS<DatTypeID> {
             entity_utils::entity_dat_type_id()
         }
@@ -175,44 +175,46 @@ impl DatumDyn for Warehouse {
             entity_utils::entity_to_value(self, dat_type)
         }
 
-    fn clone_boxed(&self) -> Box<dyn DatumDyn> {
-        entity_utils::entity_clone_boxed(self)
+        fn clone_boxed(&self) -> Box<dyn DatumDyn> {
+            entity_utils::entity_clone_boxed(self)
+        }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::Warehouse;
-    use mudu_type::datum::{Datum, DatumDyn};
+    #[cfg(test)]
+    mod tests {
+        use super::Warehouse;
+        use mudu_type::datum::{Datum, DatumDyn};
 
-    #[test]
-    fn warehouse_roundtrip_and_setters_work() {
-        let mut warehouse = Warehouse::new(
-            Some(1),
-            Some(10.5),
-            Some(0.1),
-            Some("Main".to_string()),
-            Some("Street1".to_string()),
-            Some("Street2".to_string()),
-            Some("City".to_string()),
-            Some("ST".to_string()),
-            Some("10000".to_string()),
-        );
+        #[test]
+        fn warehouse_roundtrip_and_setters_work() {
+            let mut warehouse = Warehouse::new(
+                Some(1),
+                Some(10.5),
+                Some(0.1),
+                Some("Main".to_string()),
+                Some("Street1".to_string()),
+                Some("Street2".to_string()),
+                Some("City".to_string()),
+                Some("ST".to_string()),
+                Some("10000".to_string()),
+            );
 
-        warehouse.set_w_name("Central".to_string());
-        warehouse.set_w_tax(0.2);
-        assert_eq!(warehouse.get_w_name().as_deref(), Some("Central"));
-        assert_eq!(warehouse.get_w_tax(), &Some(0.2));
+            warehouse.set_w_name("Central".to_string());
+            warehouse.set_w_tax(0.2);
+            assert_eq!(warehouse.get_w_name().as_deref(), Some("Central"));
+            assert_eq!(warehouse.get_w_tax(), &Some(0.2));
 
-        let from_value = Warehouse::from_value(&warehouse.to_value(Warehouse::dat_type()).unwrap()).unwrap();
-        assert_eq!(from_value.get_w_city().as_deref(), Some("City"));
+            let from_value =
+                Warehouse::from_value(&warehouse.to_value(Warehouse::dat_type()).unwrap()).unwrap();
+            assert_eq!(from_value.get_w_city().as_deref(), Some("City"));
 
-        let from_binary =
-            Warehouse::from_binary(warehouse.to_binary(Warehouse::dat_type()).unwrap().as_ref())
-                .unwrap();
-        assert_eq!(from_binary.get_w_zip().as_deref(), Some("10000"));
+            let from_binary = Warehouse::from_binary(
+                warehouse.to_binary(Warehouse::dat_type()).unwrap().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(from_binary.get_w_zip().as_deref(), Some("10000"));
+        }
     }
-}
 
     impl Entity for Warehouse {
         fn new_empty() -> Self {

@@ -90,16 +90,67 @@ impl SysRandom for PortableRandom {
 
 struct PortableFs;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn flag_rdwr(flags: i32) -> i32 {
+    flags & libc::O_RDWR
+}
+
+#[cfg(target_arch = "wasm32")]
+fn flag_rdwr(flags: i32) -> i32 {
+    // POSIX-compatible fallback values used by wasi-style open flags.
+    flags & 0x0002
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flag_wronly(flags: i32) -> i32 {
+    flags & libc::O_WRONLY
+}
+
+#[cfg(target_arch = "wasm32")]
+fn flag_wronly(flags: i32) -> i32 {
+    flags & 0x0001
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flag_creat(flags: i32) -> i32 {
+    flags & libc::O_CREAT
+}
+
+#[cfg(target_arch = "wasm32")]
+fn flag_creat(flags: i32) -> i32 {
+    flags & 0x0040
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flag_trunc(flags: i32) -> i32 {
+    flags & libc::O_TRUNC
+}
+
+#[cfg(target_arch = "wasm32")]
+fn flag_trunc(flags: i32) -> i32 {
+    flags & 0x0200
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flag_append(flags: i32) -> i32 {
+    flags & libc::O_APPEND
+}
+
+#[cfg(target_arch = "wasm32")]
+fn flag_append(flags: i32) -> i32 {
+    flags & 0x0400
+}
+
 impl SysFs for PortableFs {
     fn open(&self, path: &Path, flags: i32, _mode: u32) -> RS<File> {
         let mut options = std::fs::OpenOptions::new();
-        let read = (flags & libc::O_RDWR) != 0 || (flags & libc::O_WRONLY) == 0;
-        let write = (flags & libc::O_RDWR) != 0 || (flags & libc::O_WRONLY) != 0;
+        let read = flag_rdwr(flags) != 0 || flag_wronly(flags) == 0;
+        let write = flag_rdwr(flags) != 0 || flag_wronly(flags) != 0;
         options.read(read);
         options.write(write);
-        options.create((flags & libc::O_CREAT) != 0);
-        options.truncate((flags & libc::O_TRUNC) != 0);
-        options.append((flags & libc::O_APPEND) != 0);
+        options.create(flag_creat(flags) != 0);
+        options.truncate(flag_trunc(flags) != 0);
+        options.append(flag_append(flags) != 0);
         options
             .open(path)
             .map_err(|e| m_error!(EC::IOErr, "open file error", e))

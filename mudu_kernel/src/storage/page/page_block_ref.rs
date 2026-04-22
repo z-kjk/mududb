@@ -1,10 +1,16 @@
 use crate::storage::page::page_header::{
-    PageHeader, NONE_PAGE_ID, PAGE_HEADER_MAGIC, PAGE_HEADER_SIZE,
+    PageHeader, NONE_PAGE_ID, PAGE_HEADER_MAGIC, PAGE_HEADER_OFF_FIRST_FREE_OFFSET,
+    PAGE_HEADER_OFF_FREE_BYTES, PAGE_HEADER_OFF_LSN, PAGE_HEADER_OFF_MAGIC,
+    PAGE_HEADER_OFF_NEXT_PAGE, PAGE_HEADER_OFF_PAGE_ID, PAGE_HEADER_OFF_PREV_PAGE,
+    PAGE_HEADER_OFF_RECORD_COUNT, PAGE_HEADER_OFF_TUPLE_FLAGS,
+    PAGE_HEADER_OFF_TUPLE_FORMAT_VERSION, PAGE_HEADER_OFF_TUPLE_SCHEMA_HASH,
+    PAGE_HEADER_OFF_VERSION, PAGE_HEADER_SIZE, PAGE_HEADER_VERSION_LATEST,
 };
 use crate::storage::page::page_tailer::{PageTailer, PAGE_TAILER_SIZE};
 use crate::storage::page::record_slot::{RecordSlot, RECORD_SLOT_SIZE};
 use crate::storage::page::record_slot_ref::RecordSlotRef;
 use crate::storage::page::PageId;
+use byteorder::{ByteOrder, LittleEndian};
 use mudu::common::crc::crc16;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
@@ -47,6 +53,91 @@ impl<'a> PageBlockRef<'a> {
         PageHeader::decode(&self.page[..PAGE_HEADER_SIZE])
     }
 
+    pub fn header_magic(&self) -> RS<u32> {
+        self.check_page_len()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_MAGIC..PAGE_HEADER_OFF_MAGIC + 4],
+        ))
+    }
+
+    pub fn header_version(&self) -> RS<u32> {
+        self.check_page_len()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_VERSION..PAGE_HEADER_OFF_VERSION + 4],
+        ))
+    }
+
+    pub fn header_page_id(&self) -> RS<PageId> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_PAGE_ID..PAGE_HEADER_OFF_PAGE_ID + 4],
+        ))
+    }
+
+    pub fn header_prev_page(&self) -> RS<PageId> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_PREV_PAGE..PAGE_HEADER_OFF_PREV_PAGE + 4],
+        ))
+    }
+
+    pub fn header_next_page(&self) -> RS<PageId> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_NEXT_PAGE..PAGE_HEADER_OFF_NEXT_PAGE + 4],
+        ))
+    }
+
+    pub fn header_lsn(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_LSN..PAGE_HEADER_OFF_LSN + 4],
+        ))
+    }
+
+    pub fn header_record_count(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_RECORD_COUNT..PAGE_HEADER_OFF_RECORD_COUNT + 4],
+        ))
+    }
+
+    pub fn header_first_free_offset(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_FIRST_FREE_OFFSET..PAGE_HEADER_OFF_FIRST_FREE_OFFSET + 4],
+        ))
+    }
+
+    pub fn header_free_bytes(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_FREE_BYTES..PAGE_HEADER_OFF_FREE_BYTES + 4],
+        ))
+    }
+
+    pub fn header_tuple_format_version(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page
+                [PAGE_HEADER_OFF_TUPLE_FORMAT_VERSION..PAGE_HEADER_OFF_TUPLE_FORMAT_VERSION + 4],
+        ))
+    }
+
+    pub fn header_tuple_flags(&self) -> RS<u32> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u32(
+            &self.page[PAGE_HEADER_OFF_TUPLE_FLAGS..PAGE_HEADER_OFF_TUPLE_FLAGS + 4],
+        ))
+    }
+
+    pub fn header_tuple_schema_hash(&self) -> RS<u64> {
+        self.ensure_header_layout()?;
+        Ok(LittleEndian::read_u64(
+            &self.page[PAGE_HEADER_OFF_TUPLE_SCHEMA_HASH..PAGE_HEADER_OFF_TUPLE_SCHEMA_HASH + 8],
+        ))
+    }
+
     pub fn tailer(&self) -> RS<PageTailer> {
         self.check_page_len()?;
         PageTailer::decode(
@@ -55,7 +146,7 @@ impl<'a> PageBlockRef<'a> {
     }
 
     pub fn slot_count(&self) -> RS<usize> {
-        Ok(self.header()?.record_count() as usize)
+        Ok(self.header_record_count()? as usize)
     }
 
     pub fn slot(&self, sorted_index: usize) -> RS<RecordSlot> {
@@ -100,7 +191,7 @@ impl<'a> PageBlockRef<'a> {
     }
 
     pub fn free_bytes(&self) -> RS<usize> {
-        Ok(self.header()?.free_bytes() as usize)
+        Ok(self.header_free_bytes()? as usize)
     }
 
     pub fn is_empty(&self) -> RS<bool> {
@@ -151,12 +242,12 @@ impl<'a> PageBlockRef<'a> {
     }
 
     pub fn active_prev_page(&self) -> RS<Option<PageId>> {
-        let prev = self.header()?.prev_page();
+        let prev = self.header_prev_page()?;
         Ok((prev != NONE_PAGE_ID).then_some(prev))
     }
 
     pub fn active_next_page(&self) -> RS<Option<PageId>> {
-        let next = self.header()?.next_page();
+        let next = self.header_next_page()?;
         Ok((next != NONE_PAGE_ID).then_some(next))
     }
 
@@ -166,6 +257,12 @@ impl<'a> PageBlockRef<'a> {
             return Err(m_error!(
                 EC::DecodeErr,
                 format!("invalid page magic {:#x}", header.magic())
+            ));
+        }
+        if header.version() > PAGE_HEADER_VERSION_LATEST {
+            return Err(m_error!(
+                EC::DecodeErr,
+                format!("unsupported page format version {}", header.version())
             ));
         }
 
@@ -262,6 +359,28 @@ impl<'a> PageBlockRef<'a> {
                     "page block requires {} bytes, got {}",
                     PAGE_SIZE,
                     self.page.len()
+                )
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_header_layout(&self) -> RS<()> {
+        self.check_page_len()?;
+        let magic = self.header_magic()?;
+        if magic != PAGE_HEADER_MAGIC {
+            return Err(m_error!(
+                EC::DecodeErr,
+                format!("invalid page magic {:#x}", magic)
+            ));
+        }
+        let version = self.header_version()?;
+        if version != PAGE_HEADER_VERSION_LATEST {
+            return Err(m_error!(
+                EC::DecodeErr,
+                format!(
+                    "unsupported page format version {}, expected {}",
+                    version, PAGE_HEADER_VERSION_LATEST
                 )
             ));
         }

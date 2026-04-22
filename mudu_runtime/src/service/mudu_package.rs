@@ -6,10 +6,18 @@ use mudu::error::others::io_error;
 use mudu::m_error;
 use mudu::utils::json::from_json_str;
 use mudu_contract::procedure::mod_proc_desc::ModProcDesc;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+
+#[derive(Debug, Clone, Deserialize)]
+struct PackageManifest {
+    format_version: u16,
+    #[serde(default)]
+    files: Vec<String>,
+}
 
 #[derive(Debug)]
 pub struct MuduPackage {
@@ -62,6 +70,7 @@ fn load_and_extract_package<P: AsRef<Path>>(package_path: P) -> RS<MuduPackage> 
     let mut initdb_sql = String::new();
     let mut app_cfg_text = String::new();
     let mut app_proc_desc_text = String::new();
+    let mut manifest_text = String::new();
     let mut modules = HashMap::new();
     // Iterate through all files in the archive
     for i in 0..archive.len() {
@@ -73,6 +82,8 @@ fn load_and_extract_package<P: AsRef<Path>>(package_path: P) -> RS<MuduPackage> 
         let file_name = file.name().to_string();
         if file_name == file_name::PACKAGE_CFG {
             file.read_to_string(&mut app_cfg_text).map_err(io_error)?;
+        } else if file_name == file_name::PACKAGE_MANIFEST {
+            file.read_to_string(&mut manifest_text).map_err(io_error)?;
         } else if file_name == file_name::DDL_SQL {
             file.read_to_string(&mut ddl_sql).map_err(io_error)?;
         } else if file_name == file_name::INIT_DB_SQL {
@@ -110,6 +121,36 @@ fn load_and_extract_package<P: AsRef<Path>>(package_path: P) -> RS<MuduPackage> 
         .map_err(|e| m_error!(EC::DecodeErr, "parse app configuration error", e))?;
     let app_proc_desc: ModProcDesc = from_json_str(app_proc_desc_text.as_str())
         .map_err(|e| m_error!(EC::DecodeErr, "parse app procedure description error", e))?;
+
+    if !manifest_text.is_empty() {
+        let manifest: PackageManifest = from_json_str(manifest_text.as_str())
+            .map_err(|e| m_error!(EC::DecodeErr, "parse package manifest error", e))?;
+        if manifest.format_version != 1 {
+            return Err(m_error!(
+                EC::DecodeErr,
+                format!(
+                    "unsupported package manifest format_version {}",
+                    manifest.format_version
+                )
+            ));
+        }
+        // Basic sanity check: if a manifest is present, it should at least list
+        // the required entries; otherwise leave behavior unchanged.
+        let required = [
+            file_name::PACKAGE_CFG,
+            file_name::PROCEDURE_DESC,
+            file_name::DDL_SQL,
+            file_name::INIT_DB_SQL,
+        ];
+        for req in required {
+            if !manifest.files.iter().any(|f| f == req) {
+                return Err(m_error!(
+                    EC::DecodeErr,
+                    format!("package manifest missing required file {}", req)
+                ));
+            }
+        }
+    }
     let modules = align_single_module_name(modules, &app_proc_desc);
 
     Ok(MuduPackage {

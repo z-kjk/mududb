@@ -3,10 +3,10 @@ use mudu::common::id::OID;
 use mudu::error::ec::EC;
 use std::sync::Arc;
 
-use crate::contract::schema_table::SchemaTable;
-use crate::contract::table_desc::TableDesc;
 use crate::contract::partition_rule::PartitionRuleDesc;
 use crate::contract::partition_rule_binding::{PartitionPlacement, TablePartitionBinding};
+use crate::contract::schema_table::SchemaTable;
+use crate::contract::table_desc::TableDesc;
 use mudu::common::result::RS;
 
 #[async_trait]

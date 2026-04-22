@@ -16,7 +16,7 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use mudu_contract::protocol::{
-    encode_error_response, encode_session_create_response, Frame, SessionCreateResponse,
+    encode_merror_response, encode_session_create_response, Frame, SessionCreateResponse,
 };
 use mudu_utils::notifier::{notify_wait, Waiter};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -327,7 +327,7 @@ impl FallbackAsyncFuncState {
                 }
                 Poll::Ready(Err(err)) => {
                     if let Some(connection) = connections.get_mut(&task.conn_id()) {
-                        let response = encode_error_response(task.request_id(), err.to_string())?;
+                        let response = encode_merror_response(task.request_id(), &err)?;
                         connection.write_buf.extend_from_slice(&response);
                     }
                 }
@@ -618,7 +618,7 @@ fn drain_transferred_connections(
                     action.request_id(),
                     &SessionCreateResponse::new(session_id),
                 )?,
-                Err(err) => encode_error_response(action.request_id(), err.to_string())?,
+                Err(err) => encode_merror_response(action.request_id(), &err)?,
             };
             if let Some(registered) = connections.get_mut(&connection.transfer.conn_id()) {
                 registered.write_buf.extend_from_slice(&payload);
@@ -743,7 +743,7 @@ fn read_and_dispatch(
             }
             Ok(None) => {}
             Err(err) => {
-                let payload = encode_error_response(frame.header().request_id(), err.to_string())?;
+                let payload = encode_merror_response(frame.header().request_id(), &err)?;
                 connection.write_buf.extend_from_slice(&payload);
             }
         }

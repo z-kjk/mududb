@@ -522,19 +522,19 @@ mod tests {
 
         let records =
             async_invoke_host_query::<i32, _>(8, &stmt, &(), |input: Vec<u8>| async move {
-            let (oid, _, _) = query_invoke::deserialize_query_param(&input).unwrap();
-            assert_eq!(oid, 8);
-            Ok(query_invoke::serialize_query_result(Ok((
-                mudu_contract::database::result_batch::ResultBatch::from(
-                    8,
-                    vec![TupleValue::from(vec![DatValue::from_i32(13)])],
-                    true,
-                ),
-                <i32 as TupleDatum>::tuple_desc_static(&["value".to_string()]),
-            ))))
-        })
-        .await
-        .unwrap();
+                let (oid, _, _) = query_invoke::deserialize_query_param(&input).unwrap();
+                assert_eq!(oid, 8);
+                Ok(query_invoke::serialize_query_result(Ok((
+                    mudu_contract::database::result_batch::ResultBatch::from(
+                        8,
+                        vec![TupleValue::from(vec![DatValue::from_i32(13)])],
+                        true,
+                    ),
+                    <i32 as TupleDatum>::tuple_desc_static(&["value".to_string()]),
+                ))))
+            })
+            .await
+            .unwrap();
         assert_eq!(records.next_record().unwrap(), Some(13));
 
         let got = async_invoke_host_session_get(9, b"k", |input: Vec<u8>| async move {

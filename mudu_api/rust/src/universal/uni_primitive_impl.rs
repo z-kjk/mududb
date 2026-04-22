@@ -11,26 +11,22 @@ impl UniPrimitive {
     pub fn uni_to(self) -> RS<DatType> {
         let ty = match self {
             UniPrimitive::Bool => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive bool is not supported"));
             }
-            UniPrimitive::U8 => {
-                unimplemented!()
-            }
-            UniPrimitive::I8 => {
-                unimplemented!()
-            }
+            UniPrimitive::U8 => return Err(m_error!(EC::TypeErr, "primitive u8 is not supported")),
+            UniPrimitive::I8 => return Err(m_error!(EC::TypeErr, "primitive i8 is not supported")),
             UniPrimitive::U16 => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive u16 is not supported"));
             }
             UniPrimitive::I16 => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive i16 is not supported"));
             }
             UniPrimitive::U32 => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive u32 is not supported"));
             }
             UniPrimitive::I32 => DatType::default_for(DatTypeID::I32),
             UniPrimitive::U64 => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive u64 is not supported"));
             }
             UniPrimitive::U128 => DatType::default_for(DatTypeID::U128),
             UniPrimitive::I64 => DatType::default_for(DatTypeID::I64),
@@ -38,7 +34,7 @@ impl UniPrimitive {
             UniPrimitive::F32 => DatType::default_for(DatTypeID::F32),
             UniPrimitive::F64 => DatType::default_for(DatTypeID::F64),
             UniPrimitive::Char => {
-                unimplemented!()
+                return Err(m_error!(EC::TypeErr, "primitive char is not supported"));
             }
             UniPrimitive::String => DatType::default_for(DatTypeID::String),
             UniPrimitive::Blob => DatType::default_for(DatTypeID::Binary),

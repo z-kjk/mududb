@@ -19,7 +19,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct LSSyncConn {
@@ -63,7 +63,7 @@ impl LockedTrans {
 
 fn mudu_lib_db_file<P: AsRef<Path>>(db_path: P, app_name: String) -> RS<String> {
     let path = PathBuf::from(db_path.as_ref()).join(app_name);
-    info!("db path {}", path.display());
+    debug!("db path {}", path.display());
     let opt = path.to_str();
     match opt {
         Some(t) => Ok(t.to_string()),

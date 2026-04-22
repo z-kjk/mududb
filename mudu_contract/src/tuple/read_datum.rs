@@ -11,7 +11,7 @@ pub fn read_slot(field_desc: &FieldDesc, tuple: &TupleSlice) -> RS<Slot> {
     if _slot.offset() + Slot::size_of() > tuple.len() {
         return Err(m_error!(EC::IndexOutOfRange));
     };
-    let slot = Slot::from_binary(&tuple[_slot.offset().._slot.offset() + Slot::size_of()]);
+    let slot = Slot::from_binary(&tuple[_slot.offset().._slot.offset() + Slot::size_of()])?;
     if slot.offset() + slot.length() > tuple.len() {
         return Err(m_error!(EC::IndexOutOfRange));
     }
@@ -73,7 +73,7 @@ pub fn read_var_len_value(offset: usize, tuple: &TupleSlice) -> RS<&[u8]> {
     if tuple.len() < _offset + Slot::size_of() {
         Err(m_error!(EC::IndexOutOfRange))
     } else {
-        let slot = Slot::from_binary(&tuple[_offset.._offset + Slot::size_of()]);
+        let slot = Slot::from_binary(&tuple[_offset.._offset + Slot::size_of()])?;
         if tuple.len() < slot.offset() + slot.length() {
             return Err(m_error!(EC::IndexOutOfRange));
         }

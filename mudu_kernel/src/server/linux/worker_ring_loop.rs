@@ -32,8 +32,10 @@ use crossbeam_queue::SegQueue;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use mudu_contract::protocol::encode_error_response;
-use mudu_contract::protocol::{encode_session_create_response, SessionCreateResponse};
+use mudu_contract::protocol::{
+    encode_merror_response, encode_session_create_response, SessionCreateResponse,
+};
+use mudu_utils::task_context::TaskContext;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::fd::{AsRawFd, RawFd};
@@ -43,7 +45,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+#[path = "worker_ring_loop/recovery.rs"]
 mod recovery;
+#[path = "worker_ring_loop/runtime.rs"]
 mod runtime;
 
 type XLWorkerLog =
@@ -242,6 +246,16 @@ impl WorkerRingLoop {
                 }
             }
             InflightOp::UserIo(op) => {
+                let op_id = op.op_id();
+                let op_kind = op.kind();
+                if let Some(task_id) = self.worker_local_ring.task_for_op(op_id) {
+                    if let Some(ctx) = TaskContext::get(task_id) {
+                        ctx.watch("io.last_op_id", &op_id.to_string());
+                        ctx.watch("io.last_op_kind", op_kind);
+                        ctx.watch("io.last_cqe_token", &token.to_string());
+                        ctx.watch("io.last_result", &result.to_string());
+                    }
+                }
                 handle_user_io_completion(&self.worker_local_ring, op, result)?
             }
         }
@@ -266,9 +280,7 @@ impl WorkerRingLoop {
                                 action.request_id(),
                                 &SessionCreateResponse::new(session_id),
                             )?,
-                            Err(err) => {
-                                encode_error_response(action.request_id(), err.to_string())?
-                            }
+                            Err(err) => encode_merror_response(action.request_id(), &err)?,
                         },
                     )
                 } else {

@@ -1,14 +1,17 @@
-use base64::Engine;
 use clap::{Args, Parser, Subcommand};
 use mudu_binding::procedure::procedure_invoke;
 use mudu_cli::client::async_client::{AsyncClient, AsyncClientImpl};
 use mudu_cli::client::json_client::JsonClient;
-use mudu_contract::procedure::proc_desc::ProcDesc;
+use mudu_cli::management::{
+    fetch_app_detail, fetch_app_list, fetch_proc_desc, fetch_server_topology, install_app_package,
+    route_partition, uninstall_app,
+};
 use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::protocol::{ProcedureInvokeRequest, SessionCloseRequest, SessionCreateRequest};
 use mudu_contract::tuple::datum_desc::DatumDesc;
 use serde_json::{Value, json};
 use std::fs;
+use std::io::IsTerminal;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -17,10 +20,16 @@ type AppResult<T> = Result<T, String>;
 const CLI_EXAMPLES: &str = "\
 Examples:
   mcli --addr 127.0.0.1:9527 command --json '{\"app_name\":\"demo\",\"sql\":\"select 1\"}'
+  mcli --addr 127.0.0.1:9527 shell --app demo
   mcli --addr 127.0.0.1:9527 put --json-file put.json
   cat invoke.json | mcli --addr 127.0.0.1:9527 invoke --json-file -
   mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
-  mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{\"user_key\":\"user-1\"}'";
+  mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{\"user_key\":\"user-1\"}'
+  mcli --http-addr 127.0.0.1:8300 app-list
+  mcli --http-addr 127.0.0.1:8300 app-detail --app wallet
+  mcli --http-addr 127.0.0.1:8300 app-uninstall --app wallet
+  mcli --http-addr 127.0.0.1:8300 server-topology
+  mcli --http-addr 127.0.0.1:8300 partition-route --rule-name user_rule --key user-100";
 
 #[derive(Parser, Debug)]
 #[command(name = "mcli")]
@@ -35,6 +44,20 @@ struct Cli {
     #[arg(
         long,
         global = true,
+        help = "Render SQL query results as an interactive table (ratatui). Auto-enabled on TTY."
+    )]
+    table: bool,
+    #[arg(
+        long,
+        global = true,
+        conflicts_with = "table",
+        visible_alias = "no-tui",
+        help = "Disable ratatui TUI rendering and always print JSON."
+    )]
+    no_table: bool,
+    #[arg(
+        long,
+        global = true,
         help = "Print compact JSON instead of pretty JSON."
     )]
     compact: bool,
@@ -46,6 +69,8 @@ struct Cli {
 enum Commands {
     /// Send a SQL query or execute request encoded as JSON.
     Command(JsonRequestArgs),
+    /// Interactive SQL shell (like mysql/psql).
+    Shell(ShellArgs),
     /// Put a key-value item using a JSON request body.
     Put(JsonRequestArgs),
     /// Get a key using a JSON request body.
@@ -54,10 +79,20 @@ enum Commands {
     Range(JsonRequestArgs),
     /// Invoke a procedure using a JSON request body.
     Invoke(JsonRequestArgs),
-    /// Install a .mpk package through the management HTTP API.
+    /// Install a .mpk package through the HTTP management API.
     AppInstall(AppInstallArgs),
     /// Invoke an installed procedure through the TCP protocol.
     AppInvoke(AppInvokeArgs),
+    /// List installed apps via HTTP management API.
+    AppList,
+    /// Show app procedures or one procedure detail via HTTP management API.
+    AppDetail(AppDetailArgs),
+    /// Uninstall an app via HTTP management API.
+    AppUninstall(AppUninstallArgs),
+    /// Get worker topology via HTTP management API.
+    ServerTopology,
+    /// Route a partition key/range via HTTP management API.
+    PartitionRoute(PartitionRouteArgs),
 }
 
 #[derive(Args, Debug)]
@@ -90,6 +125,44 @@ struct AppInvokeArgs {
     request: JsonRequestArgs,
 }
 
+#[derive(Args, Debug)]
+struct ShellArgs {
+    #[arg(
+        long,
+        default_value = "demo",
+        help = "Initial app name to run queries against."
+    )]
+    app: String,
+}
+
+#[derive(Args, Debug)]
+struct AppDetailArgs {
+    #[arg(long)]
+    app: String,
+    #[arg(long)]
+    module: Option<String>,
+    #[arg(long)]
+    proc: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct AppUninstallArgs {
+    #[arg(long)]
+    app: String,
+}
+
+#[derive(Args, Debug)]
+struct PartitionRouteArgs {
+    #[arg(long = "rule-name")]
+    rule_name: String,
+    #[arg(long, value_delimiter = ',')]
+    key: Option<Vec<String>>,
+    #[arg(long, value_delimiter = ',')]
+    start: Option<Vec<String>>,
+    #[arg(long, value_delimiter = ',')]
+    end: Option<Vec<String>>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
@@ -100,22 +173,35 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> AppResult<()> {
-    let output = match cli.command {
+    let Cli {
+        addr,
+        http_addr,
+        compact,
+        table,
+        no_table,
+        command,
+    } = cli;
+
+    let output = match command {
         Commands::Command(args) => {
             let request = load_json_request(args)?;
-            let mut client = JsonClient::connect(&cli.addr)
+            let mut client = JsonClient::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             client
                 .command(request)
                 .await
                 .map_err(|e| format!("command request failed: {}", e))?
         }
+        Commands::Shell(args) => {
+            run_shell(&addr, compact, table, no_table, args).await?;
+            return Ok(());
+        }
         Commands::Put(args) => {
             let request = load_json_request(args)?;
-            let mut client = AsyncClientImpl::connect(&cli.addr)
+            let mut client = AsyncClientImpl::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             let session_id = client
                 .create_session(SessionCreateRequest::new(None))
                 .await
@@ -135,9 +221,9 @@ async fn run(cli: Cli) -> AppResult<()> {
         }
         Commands::Get(args) => {
             let request = load_json_request(args)?;
-            let mut client = AsyncClientImpl::connect(&cli.addr)
+            let mut client = AsyncClientImpl::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             let session_id = client
                 .create_session(SessionCreateRequest::new(None))
                 .await
@@ -157,9 +243,9 @@ async fn run(cli: Cli) -> AppResult<()> {
         }
         Commands::Range(args) => {
             let request = load_json_request(args)?;
-            let mut client = AsyncClientImpl::connect(&cli.addr)
+            let mut client = AsyncClientImpl::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             let session_id = client
                 .create_session(SessionCreateRequest::new(None))
                 .await
@@ -179,9 +265,9 @@ async fn run(cli: Cli) -> AppResult<()> {
         }
         Commands::Invoke(args) => {
             let request = load_json_request(args)?;
-            let mut client = AsyncClientImpl::connect(&cli.addr)
+            let mut client = AsyncClientImpl::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             let session_id = client
                 .create_session(SessionCreateRequest::new(None))
                 .await
@@ -202,20 +288,22 @@ async fn run(cli: Cli) -> AppResult<()> {
         Commands::AppInstall(args) => {
             let mpk_binary = fs::read(&args.mpk)
                 .map_err(|e| format!("read {} failed: {}", args.mpk.display(), e))?;
-            let payload = json!({
-                "mpk_base64": base64::engine::general_purpose::STANDARD.encode(mpk_binary),
+            install_app_package(&http_addr, mpk_binary).await?;
+            let mut response = json!({
+                "status": "ok",
             });
-            let response = post_http_json(&cli.http_addr, "/mudu/app/install", payload).await?;
-            let _ = extract_http_api_data(response)?;
-            json!({
-                "installed": true,
-                "mpk_path": args.mpk.display().to_string(),
-            })
+            if let Value::Object(ref mut map) = response {
+                map.insert(
+                    "mpk_path".to_string(),
+                    Value::String(args.mpk.display().to_string()),
+                );
+            }
+            response
         }
         Commands::AppInvoke(args) => {
             let request = load_json_request(args.request)?;
             let proc_desc =
-                fetch_proc_desc(&cli.http_addr, &args.app, &args.module, &args.proc).await?;
+                fetch_proc_desc(&http_addr, &args.app, &args.module, &args.proc).await?;
             let request_object = request
                 .as_object()
                 .cloned()
@@ -223,9 +311,9 @@ async fn run(cli: Cli) -> AppResult<()> {
             let param = to_param(&request_object, proc_desc.param_desc().fields())?;
             let payload = procedure_invoke::serialize_param(param)
                 .map_err(|e| format!("serialize procedure param failed: {}", e))?;
-            let mut client = AsyncClientImpl::connect(&cli.addr)
+            let mut client = AsyncClientImpl::connect(&addr)
                 .await
-                .map_err(|e| format!("connect {} failed: {}", cli.addr, e))?;
+                .map_err(|e| format!("connect {} failed: {}", addr, e))?;
             let session_id = client
                 .create_session(SessionCreateRequest::new(None))
                 .await
@@ -248,9 +336,47 @@ async fn run(cli: Cli) -> AppResult<()> {
             procedure_invoke::result_to_json(result)
                 .map_err(|e| format!("convert procedure result to JSON failed: {}", e))?
         }
+        Commands::AppList => fetch_app_list(&http_addr).await?,
+        Commands::AppDetail(args) => {
+            if args.proc.is_some() && args.module.is_none() {
+                return Err("--proc requires --module".to_string());
+            }
+            fetch_app_detail(
+                &http_addr,
+                &args.app,
+                args.module.as_deref(),
+                args.proc.as_deref(),
+            )
+            .await?
+        }
+        Commands::AppUninstall(args) => {
+            uninstall_app(&http_addr, &args.app).await?;
+            json!({
+                "status": "ok",
+                "app": args.app,
+            })
+        }
+        Commands::ServerTopology => serde_json::to_value(fetch_server_topology(&http_addr).await?)
+            .map_err(|e| format!("serialize server topology failed: {}", e))?,
+        Commands::PartitionRoute(args) => {
+            if args.key.is_some() && (args.start.is_some() || args.end.is_some()) {
+                return Err("use either --key or (--start/--end), not both".to_string());
+            }
+            if args.key.is_none() && args.start.is_none() && args.end.is_none() {
+                return Err(
+                    "partition-route requires either --key or at least one of --start/--end"
+                        .to_string(),
+                );
+            }
+            serde_json::to_value(
+                route_partition(&http_addr, &args.rule_name, args.key, args.start, args.end)
+                    .await?,
+            )
+            .map_err(|e| format!("serialize partition route response failed: {}", e))?
+        }
     };
 
-    print_json(&output, cli.compact)?;
+    print_output(&output, compact, table, no_table)?;
     Ok(())
 }
 
@@ -330,74 +456,201 @@ fn print_json(value: &Value, compact: bool) -> AppResult<()> {
     Ok(())
 }
 
-async fn post_http_json(http_addr: &str, path: &str, payload: Value) -> AppResult<Value> {
-    let url = format!("http://{}{}", http_addr, path);
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("build HTTP client failed: {}", e))?;
-    let response = client
-        .post(&url)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("POST {} failed: {}", url, e))?;
-    response
-        .json::<Value>()
-        .await
-        .map_err(|e| format!("decode HTTP response from {} failed: {}", url, e))
-}
-
-async fn get_http_json(http_addr: &str, path: &str) -> AppResult<Value> {
-    let url = format!("http://{}{}", http_addr, path);
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("build HTTP client failed: {}", e))?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("GET {} failed: {}", url, e))?;
-    response
-        .json::<Value>()
-        .await
-        .map_err(|e| format!("decode HTTP response from {} failed: {}", url, e))
-}
-
-fn extract_http_api_data(response: Value) -> AppResult<Value> {
-    let status = response
-        .get("status")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| "HTTP API response missing numeric status".to_string())?;
-    if status == 0 {
-        return Ok(response.get("data").cloned().unwrap_or(Value::Null));
+fn print_output(value: &Value, compact: bool, table: bool, no_table: bool) -> AppResult<()> {
+    let interactive_tty = io::stdout().is_terminal() && io::stdin().is_terminal();
+    if !compact && !no_table && (table || interactive_tty) {
+        if let Some(table) = mudu_cli::tui::extract_query_table(value) {
+            mudu_cli::tui::run_query_table(table)?;
+            return Ok(());
+        }
     }
-    let message = response
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("HTTP API request failed");
-    let data = response.get("data").cloned().unwrap_or(Value::Null);
-    Err(format!("{}: {}", message, data))
+    print_json(value, compact)
 }
 
-async fn fetch_proc_desc(
-    http_addr: &str,
-    app: &str,
-    module: &str,
-    proc_name: &str,
-) -> AppResult<ProcDesc> {
-    let response = get_http_json(
-        http_addr,
-        &format!("/mudu/app/list/{}/{}/{}", app, module, proc_name),
+async fn run_shell(
+    addr: &str,
+    compact: bool,
+    table: bool,
+    no_table: bool,
+    args: ShellArgs,
+) -> AppResult<()> {
+    use rustyline::DefaultEditor;
+    use rustyline::error::ReadlineError;
+
+    let mut app = args.app;
+    let mut client = JsonClient::connect(addr)
+        .await
+        .map_err(|e| format!("connect {} failed: {}", addr, e))?;
+
+    let mut rl = DefaultEditor::new().map_err(|e| format!("init readline failed: {e}"))?;
+
+    if let Some(path) = get_history_path(&app) {
+        let _ = rl.load_history(&path);
+    }
+
+    let mut buffer = String::new();
+
+    println!("Enter SQL terminated by ';'. Meta commands: \\q, \\help, \\app <name>.");
+
+    loop {
+        let prompt = if buffer.trim().is_empty() {
+            format!("mudu({app})> ")
+        } else {
+            "....> ".to_string()
+        };
+
+        let line = match rl.readline(&prompt) {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted) => {
+                buffer.clear();
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => break,
+            Err(e) => return Err(format!("readline failed: {e}")),
+        };
+
+        let trimmed = line.trim();
+        if buffer.is_empty() && trimmed.starts_with('\\') {
+            let old_app = app.clone();
+            if handle_shell_meta(trimmed, &mut app) {
+                break;
+            }
+            if old_app != app {
+                if let Some(path) = get_history_path(&old_app) {
+                    let _ = rl.save_history(&path);
+                }
+                let _ = rl.clear_history();
+                if let Some(path) = get_history_path(&app) {
+                    let _ = rl.load_history(&path);
+                }
+            }
+            continue;
+        }
+
+        if trimmed.is_empty() && buffer.is_empty() {
+            continue;
+        }
+
+        buffer.push_str(&line);
+        buffer.push('\n');
+
+        if !statement_complete(&buffer) {
+            continue;
+        }
+
+        let statement = finalize_statement(&buffer);
+        buffer.clear();
+        if statement.is_empty() {
+            continue;
+        }
+
+        let _ = rl.add_history_entry(statement.as_str());
+        if let Some(path) = get_history_path(&app) {
+            let _ = rl.save_history(&path);
+        }
+
+        let is_query = looks_like_query(&statement);
+        let request = if is_query {
+            json!({ "app_name": app, "sql": statement })
+        } else {
+            json!({ "app_name": app, "sql": statement, "kind": "execute" })
+        };
+
+        let output = client
+            .command(request)
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+
+        if output
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
+            print_json(&output, compact)?;
+            continue;
+        }
+
+        if let Some(table_value) = mudu_cli::tui::extract_query_table(&output) {
+            let interactive_tty = io::stdout().is_terminal() && io::stdin().is_terminal();
+            if !compact && !no_table && (table || interactive_tty) {
+                mudu_cli::tui::run_query_table(table_value)?;
+            } else {
+                print_json(&output, compact)?;
+            }
+            continue;
+        }
+
+        let affected = output
+            .get("affected_rows")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        println!("affected_rows: {affected}");
+    }
+
+    Ok(())
+}
+
+fn get_history_path(app: &str) -> Option<PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(|h| {
+            let mut path = std::path::PathBuf::from(h);
+            path.push(format!(".mcli_history_{}", app));
+            path
+        })
+}
+
+fn handle_shell_meta(input: &str, app: &mut String) -> bool {
+    let mut parts = input.split_whitespace();
+    let cmd = parts.next().unwrap_or("");
+    match cmd {
+        "\\q" | "\\quit" | "\\exit" => true,
+        "\\help" | "\\h" => {
+            println!("Meta commands:");
+            println!("  \\q                 quit");
+            println!("  \\app <name>        switch app");
+            println!("  \\help              show this help");
+            println!("SQL:");
+            println!("  End statements with ';' (multi-line supported).");
+            false
+        }
+        "\\app" => {
+            if let Some(name) = parts.next() {
+                *app = name.to_string();
+                println!("app = {app}");
+            } else {
+                println!("usage: \\app <name>");
+            }
+            false
+        }
+        _ => {
+            println!("unknown meta command: {cmd} (try \\help)");
+            false
+        }
+    }
+}
+
+fn statement_complete(buf: &str) -> bool {
+    buf.trim_end().ends_with(';')
+}
+
+fn finalize_statement(buf: &str) -> String {
+    buf.trim().to_string()
+}
+
+fn looks_like_query(sql: &str) -> bool {
+    let first = sql
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        first.as_str(),
+        "select" | "with" | "show" | "describe" | "desc" | "pragma" | "explain"
     )
-    .await?;
-    let data = extract_http_api_data(response)?;
-    let proc_desc = data
-        .get("proc_desc")
-        .cloned()
-        .ok_or_else(|| "procedure detail response missing proc_desc".to_string())?;
-    serde_json::from_value(proc_desc).map_err(|e| format!("decode proc_desc failed: {}", e))
 }
 
 fn to_param(
@@ -420,6 +673,7 @@ fn to_param(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mudu_contract::procedure::proc_desc::ProcDesc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -441,29 +695,6 @@ mod tests {
     fn load_required_text_requires_input() {
         let err = load_required_text(None, None).unwrap_err();
         assert!(err.contains("--json"));
-    }
-
-    #[test]
-    fn extract_http_api_data_returns_data_on_success() {
-        let value = extract_http_api_data(json!({
-            "status": 0,
-            "message": "ok",
-            "data": {"value": 1}
-        }))
-        .unwrap();
-        assert_eq!(value, json!({"value": 1}));
-    }
-
-    #[test]
-    fn extract_http_api_data_returns_message_on_failure() {
-        let err = extract_http_api_data(json!({
-            "status": 1001,
-            "message": "fail",
-            "data": {"reason": "bad request"}
-        }))
-        .unwrap_err();
-        assert!(err.contains("fail"));
-        assert!(err.contains("bad request"));
     }
 
     #[test]
@@ -528,9 +759,24 @@ mod tests {
 
     #[test]
     fn with_invoke_session_id_injects_session_id_string() {
-        let request = with_invoke_session_id(json!({"procedure_name": "app/mod/proc"}), 99).unwrap();
+        let request =
+            with_invoke_session_id(json!({"procedure_name": "app/mod/proc"}), 99).unwrap();
         assert_eq!(request["session_id"], json!("99"));
         assert_eq!(request["procedure_name"], json!("app/mod/proc"));
+    }
+
+    #[test]
+    fn test_statement_complete() {
+        assert!(statement_complete("SELECT 1;"));
+        assert!(statement_complete("SELECT 1;  "));
+        assert!(!statement_complete("SELECT 1"));
+    }
+
+    #[test]
+    fn test_finalize_statement() {
+        assert_eq!(finalize_statement("SELECT 1;"), "SELECT 1;");
+        assert_eq!(finalize_statement("  SELECT 1;  "), "SELECT 1;");
+        assert_eq!(finalize_statement("SELECT 1"), "SELECT 1");
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {

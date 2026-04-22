@@ -38,7 +38,7 @@ pub fn update_tuple(
         let data_start_off = slot.offset();
         if value.len() <= capacity {
             let new_slot = Slot::new(slot.offset() as u32, value.len() as u32);
-            let slot_binary = new_slot.to_binary_buf();
+            let slot_binary = new_slot.to_binary_buf()?;
             let up_slot = UpdateDelta::new(
                 field.slot().offset() as u32,
                 Slot::size_of() as u32,
@@ -61,7 +61,7 @@ pub fn update_tuple(
                 // write updated field
                 let mut new_data = value.clone();
                 let new_slot = Slot::new(slot.offset() as u32, new_data.len() as u32);
-                new_slot.to_binary(&mut buf_slot[_written_field_num * Slot::size_of()..]);
+                new_slot.to_binary(&mut buf_slot[_written_field_num * Slot::size_of()..])?;
                 buf_data.append(&mut new_data);
                 _offset += buf_data.len();
                 _written_field_num += 1;
@@ -71,7 +71,7 @@ pub fn update_tuple(
                 let field = tuple_desc.get_field_desc(i);
                 let binary = read_binary_data(field, tuple)?;
                 let new_slot = Slot::new(_offset as u32, binary.len() as u32);
-                new_slot.to_binary(&mut buf_slot[_written_field_num * Slot::size_of()..]);
+                new_slot.to_binary(&mut buf_slot[_written_field_num * Slot::size_of()..])?;
                 buf_data.extend_from_slice(binary);
                 _offset += slot.length();
                 _written_field_num += 1;

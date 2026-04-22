@@ -4,6 +4,7 @@ mod xl_c_abort;
 pub mod xl_data_op;
 pub mod xl_entry;
 
+pub mod format;
 pub mod log_frame;
 pub mod lsn;
 pub mod pl_batch;

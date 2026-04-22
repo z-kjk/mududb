@@ -7,7 +7,7 @@ use mudu_utils::notifier::Waiter;
 use mudu_utils::sync::async_task::{AsyncLocalTask, Task};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{debug, info};
 
 impl AcceptHandleTask {
     pub fn new(
@@ -36,7 +36,7 @@ impl AcceptHandleTask {
         loop {
             let r = listener.accept().await;
             let incoming = r.map_err(|_e| m_error!(ER::NetErr, "client accept error", _e))?;
-            info!("accept connection {}", incoming.1);
+            debug!("accept connection {}", incoming.1);
 
             let param = IncomingSession::new(incoming.1, incoming.0);
             session_id += 1;

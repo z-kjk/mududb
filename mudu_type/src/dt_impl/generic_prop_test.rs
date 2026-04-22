@@ -42,7 +42,12 @@ fn canonical_binary(id: DatTypeID, dt: &DatType, value: &crate::dat_value::DatVa
 fn assert_binary_roundtrip(id: DatTypeID, dt: &DatType, value: &crate::dat_value::DatValue) {
     let binary = id.fn_send()(value, dt).unwrap();
     let (decoded, used) = id.fn_recv()(binary.as_ref(), dt).unwrap();
-    assert_eq!(used as usize, binary.as_ref().len(), "binary recv size mismatch for {:?}", id);
+    assert_eq!(
+        used as usize,
+        binary.as_ref().len(),
+        "binary recv size mismatch for {:?}",
+        id
+    );
     assert_eq!(
         canonical_binary(id, dt, &decoded),
         binary.as_ref(),
@@ -52,7 +57,12 @@ fn assert_binary_roundtrip(id: DatTypeID, dt: &DatType, value: &crate::dat_value
 
     let mut buf = vec![0u8; binary.as_ref().len()];
     let sent = id.fn_send_to()(value, dt, &mut buf).unwrap();
-    assert_eq!(sent as usize, binary.as_ref().len(), "send_to len mismatch for {:?}", id);
+    assert_eq!(
+        sent as usize,
+        binary.as_ref().len(),
+        "send_to len mismatch for {:?}",
+        id
+    );
     assert_eq!(buf, binary.as_ref(), "send_to bytes mismatch for {:?}", id);
 }
 
@@ -115,11 +125,21 @@ fn assert_msgpack_roundtrip(id: DatTypeID, dt: &DatType, value: &crate::dat_valu
 
 fn assert_default_is_sendable(id: DatTypeID, dt: &DatType) {
     let value = id.fn_default()(dt).unwrap();
-    assert_eq!(value.dat_type_id().unwrap(), id, "default type mismatch for {:?}", id);
+    assert_eq!(
+        value.dat_type_id().unwrap(),
+        id,
+        "default type mismatch for {:?}",
+        id
+    );
 
     let binary = id.fn_send()(&value, dt).unwrap();
     let len = id.fn_send_dat_len()(&value, dt).unwrap();
-    assert_eq!(binary.as_ref().len(), len as usize, "default data len mismatch for {:?}", id);
+    assert_eq!(
+        binary.as_ref().len(),
+        len as usize,
+        "default data len mismatch for {:?}",
+        id
+    );
 
     if let Some(type_len) = id.fn_send_type_len()(dt).unwrap() {
         assert_eq!(
@@ -145,7 +165,12 @@ fn supported_scalar_arbitrary_values_cover_roundtrip_paths() {
                 Err(arbitrary::Error::NotEnoughData) => continue,
                 Err(err) => panic!("arb value failed for {:?}: {:?}", id, err),
             };
-            assert_eq!(value.dat_type_id().unwrap(), id, "arb value type mismatch for {:?}", id);
+            assert_eq!(
+                value.dat_type_id().unwrap(),
+                id,
+                "arb value type mismatch for {:?}",
+                id
+            );
 
             assert_binary_roundtrip(id, &dt, &value);
             assert_textual_roundtrip(id, &dt, &value);

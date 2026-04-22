@@ -94,7 +94,7 @@ mod test {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tokio::runtime::Builder;
-    use tracing::info;
+    use tracing::debug;
 
     fn test_db_temp_folder() -> String {
         let folder = temp_dir();
@@ -237,12 +237,12 @@ mod test {
             &"select order_id, user_id, amount, status from orders;",
             &(),
         )?;
-        info!("affected rows {}", rows);
+        debug!("affected rows {}", rows);
         let mut n: u64 = 0;
         while let Some(_row) = result.next()? {
             n += 1;
         }
-        info!("task {} query {} rows", conn_id, n);
+        debug!("task {} query {} rows", conn_id, n);
         Ok(())
     }
 }

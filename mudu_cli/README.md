@@ -1,12 +1,18 @@
 # mcli
 
-`mcli` is the TCP protocol client CLI for MuduDB.
+`mcli` is the CLI client for MuduDB.
 
 `put`, `get`, `range`, `invoke`, and `app-invoke` create and close a temporary session automatically for each command.
 
-It talks directly to the server TCP protocol and exposes these operations:
+It talks to the server over:
+
+- TCP protocol for SQL/KV/procedure data-plane commands
+- HTTP API for admin commands
+
+It exposes these operations:
 
 - `command`
+- `shell`
 - `put`
 - `get`
 - `range`
@@ -21,6 +27,35 @@ Query:
 ```bash
 mcli --addr 127.0.0.1:9527 command --json '{"app_name":"demo","sql":"select 1"}'
 ```
+
+Interactive shell:
+
+```bash
+mcli --addr 127.0.0.1:9527 shell --app demo
+```
+
+## Output (SQL query)
+
+When `mcli command` returns a SQL result shaped like:
+
+```json
+{ "columns": ["..."], "rows": [["..."]], "affected_rows": 0, "error": null }
+```
+
+`mcli` renders it as an interactive full-screen table by default when stdout is a TTY.
+
+Controls:
+
+- `q` / `Esc`: quit
+- `Up` / `Down`, `PgUp` / `PgDn`: scroll rows
+- `Left` / `Right`: move column focus
+- `g` / `G`: jump to top / bottom
+
+Flags:
+
+- `--table`: force table UI (only applies to pretty output)
+- `--no-table` (alias: `--no-tui`): always print JSON
+- `--compact`: compact JSON (also disables table UI)
 
 Put:
 
@@ -57,7 +92,7 @@ mcli --addr 127.0.0.1:9527 invoke --json '{
 }'
 ```
 
-Install `.mpk` through the management HTTP API:
+Install `.mpk` through the HTTP management API:
 
 ```bash
 mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk

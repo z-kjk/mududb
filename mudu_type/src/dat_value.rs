@@ -256,7 +256,10 @@ mod tests {
         let value = DatValue::from_record(vec![
             DatValue::from_i32(7),
             DatValue::from_string("hello".to_string()),
-            DatValue::from_array(vec![DatValue::from_i64(9), DatValue::from_binary(vec![1, 2, 3])]),
+            DatValue::from_array(vec![
+                DatValue::from_i64(9),
+                DatValue::from_binary(vec![1, 2, 3]),
+            ]),
         ]);
 
         let json_value = serde_json::to_value(&value).unwrap();

@@ -13,10 +13,14 @@ pub mod web_handle_task;
 pub mod web_serve;
 
 #[cfg(target_os = "linux")]
+#[path = "linux/app_mgr.rs"]
 mod app_mgr;
 #[cfg(target_os = "linux")]
+#[path = "linux/iouring_admin.rs"]
 mod iouring_admin;
 #[cfg(target_os = "linux")]
+#[path = "linux/mudu_app_mgr.rs"]
 pub mod mudu_app_mgr;
 #[cfg(target_os = "linux")]
+#[path = "linux/server_ur/mod.rs"]
 pub mod server_ur;

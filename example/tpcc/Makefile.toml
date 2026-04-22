@@ -46,7 +46,7 @@ dependencies = ["generate", "transpile"]
 command = "cargo"
 args = ["build", "--target", "${TARGET}", "--${PROFILE}", "--lib"]
 
-[tasks.mpk_package]
+[tasks.package]
 dependencies = ["generate", "transpile", "cargo-build"]
 command = "mpk"
 args = [
@@ -59,8 +59,6 @@ args = [
     "--output", "${PACKAGE_TARGET}"
 ]
 
-[tasks.package]
-alias = "mpk_package"
 
 [tasks.default]
 alias = "package"
