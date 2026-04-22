@@ -91,6 +91,8 @@ touch ${HOME}/.mudu/mududb_cfg.toml
 
 ## 使用 MuduDB
 
+可选阅读：[`mcli` 管理接口（HTTP）](./mcli_admin.cn.md)。
+
 ### 1. 启动 `mudud`
 
 启动 `mudud` 前，请先确认服务进程拥有足够高的打开文件数限制。若软限制 `nofile` 仍是 `1024` 这类较低值，在较高连接数下可能出现 session 建立失败或整体卡住的问题，即使你当前交互 shell 的限制更高也是如此。
@@ -110,69 +112,117 @@ mudud
 cat /proc/$(pgrep -x mudud)/limits | rg 'open files'
 ```
 
-```bash
-mudud
-```
+`mudud` 启动后，可以先用交互式 SQL 跑一遍 CRUD，再安装并调用 `wallet` 示例应用。
 
-`mudud` 启动后，可以先验证内置 key/value 访问，再构建并安装一个 `.mpk` 示例包。
+### 2. 使用 mcli 交互式执行 CRUD
 
-### 2. 使用 mcli 读写 key/value
-
-每条 `mcli` 命令都会自动创建并关闭一个临时 session，因此不需要显式传入 `session_id`。
+先启动交互式 shell：
 
 ```bash
-mcli --addr 127.0.0.1:9527 put --json '{
-  "key": "user-1",
-  "value": "value-1"
-}'
-
-mcli --addr 127.0.0.1:9527 get --json '{
-  "key": "user-1"
-}'
+mcli --addr 127.0.0.1:9527 shell --app demo
 ```
 
-`get` 应返回：
+在 shell 中执行完整 CRUD 示例：
 
-```json
-"value-1"
+```sql
+CREATE TABLE users_demo (
+  id INT PRIMARY KEY,
+  name TEXT
+);
+
+INSERT INTO users_demo (id, name) VALUES (1, 'Alice');
+SELECT id, name FROM users_demo WHERE id = 1;
+
+UPDATE users_demo SET name = 'Alice-Updated' WHERE id = 1;
+SELECT id, name FROM users_demo WHERE id = 1;
+
+DELETE FROM users_demo WHERE id = 1;
+SELECT id, name FROM users_demo;
 ```
 
-### 3. 构建、安装和使用 MuduDB 应用
+退出 shell：
 
-#### 构建 key-value `.mpk` 包
+```text
+\q
+```
+
+Shell 说明：
+
+- 每条 SQL 语句都要以 `;` 结尾。
+- 元命令包括：`\q`、`\help`、`\app <name>`。
+- 在 TTY 下，查询结果默认以交互式表格展示。
+
+### 3. 构建、安装和使用 wallet 应用
+
+#### 构建 wallet `.mpk` 包
 
 ```bash
-cd example/key-value
+cd example/wallet
 cargo make
 ```
 
 生成的包路径为：
 
 ```bash
-target/wasm32-wasip2/release/key-value.mpk
+target/wasm32-wasip2/release/wallet.mpk
 ```
 
-#### 使用 mcli 安装 `.mpk` 包
+#### 使用 mcli 安装 wallet 包
 
 ```bash
-mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/key-value.mpk
+mcli --http-addr 127.0.0.1:8300 app-install --mpk target/wasm32-wasip2/release/wallet.mpk
 ```
 
-#### 使用 mcli 调用已安装 `.mpk` 中的过程
-
-通过 `kv_insert` 过程写入一条记录：
+安装后，可通过 HTTP 管理命令确认状态：
 
 ```bash
-mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_insert --json '{
-  "user_key": "user-1",
-  "value": "value-from-mpk"
+mcli --http-addr 127.0.0.1:8300 app-list
+mcli --http-addr 127.0.0.1:8300 app-detail --app wallet
+mcli --http-addr 127.0.0.1:8300 app-detail --app wallet --module wallet --proc create_user
+mcli --http-addr 127.0.0.1:8300 server-topology
+```
+
+#### 调用 wallet 过程
+
+创建两个用户：
+
+```bash
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc create_user --json '{
+  "user_id": 1001,
+  "name": "Alice",
+  "email": "alice@example.com"
+}'
+
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc create_user --json '{
+  "user_id": 1002,
+  "name": "Bob",
+  "email": "bob@example.com"
 }'
 ```
 
-再通过 `kv_read` 过程读取：
+说明：`app-invoke` 通过 TCP 调用过程；当前命令仍需要 `--http-addr` 来获取过程描述信息。
+
+充值并转账：
 
 ```bash
-mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app kv --module key_value --proc kv_read --json '{
-  "user_key": "user-1"
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc deposit --json '{
+  "user_id": 1001,
+  "amount": 5000
 }'
+
+mcli --addr 127.0.0.1:9527 --http-addr 127.0.0.1:8300 app-invoke --app wallet --module wallet --proc transfer --json '{
+  "from_user_id": 1001,
+  "to_user_id": 1002,
+  "amount": 1200
+}'
+```
+
+在 shell 中验证钱包余额：
+
+```bash
+mcli --addr 127.0.0.1:9527 shell --app wallet
+```
+
+```sql
+SELECT user_id, balance FROM wallets WHERE user_id IN (1001, 1002);
 ```

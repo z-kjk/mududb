@@ -10,6 +10,7 @@ mod portable;
 pub mod sync;
 pub mod task;
 #[cfg(target_os = "linux")]
+#[path = "linux/uring.rs"]
 pub mod uring;
 
 pub mod random {

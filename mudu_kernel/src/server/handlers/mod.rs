@@ -1,6 +1,7 @@
 mod batch;
 mod execute;
 mod get;
+mod handshake;
 mod procedure_invoke;
 mod put;
 mod query;
@@ -11,6 +12,7 @@ mod session_create;
 pub(in crate::server) use batch::BatchHandler;
 pub(in crate::server) use execute::ExecuteHandler;
 pub(in crate::server) use get::GetHandler;
+pub(in crate::server) use handshake::HandshakeHandler;
 pub(in crate::server) use procedure_invoke::ProcedureInvokeHandler;
 pub(in crate::server) use put::PutHandler;
 pub(in crate::server) use query::QueryHandler;

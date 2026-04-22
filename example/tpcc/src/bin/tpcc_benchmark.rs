@@ -167,11 +167,23 @@ async fn run_tcp(args: Args) -> RS<()> {
 
     let mut client = AsyncClientImpl::connect(&args.tcp_addr)
         .await
-        .map_err(|e| m_error!(mudu::error::ec::EC::NetErr, "connect tpcc tcp client error", e))?;
+        .map_err(|e| {
+            m_error!(
+                mudu::error::ec::EC::NetErr,
+                "connect tpcc tcp client error",
+                e
+            )
+        })?;
     let session_id = client
         .create_session(mudu_contract::protocol::SessionCreateRequest::new(None))
         .await
-        .map_err(|e| m_error!(mudu::error::ec::EC::NetErr, "create tpcc tcp session error", e))?
+        .map_err(|e| {
+            m_error!(
+                mudu::error::ec::EC::NetErr,
+                "create tpcc tcp session error",
+                e
+            )
+        })?
         .session_id();
 
     invoke_void(
@@ -251,9 +263,17 @@ async fn run_tcp(args: Args) -> RS<()> {
     }
 
     let _ = client
-        .close_session(mudu_contract::protocol::SessionCloseRequest::new(session_id))
+        .close_session(mudu_contract::protocol::SessionCloseRequest::new(
+            session_id,
+        ))
         .await
-        .map_err(|e| m_error!(mudu::error::ec::EC::NetErr, "close tpcc tcp session error", e))?;
+        .map_err(|e| {
+            m_error!(
+                mudu::error::ec::EC::NetErr,
+                "close tpcc tcp session error",
+                e
+            )
+        })?;
     print_summary("tcp", &args, start.elapsed().as_secs_f64());
     Ok(())
 }
@@ -378,7 +398,13 @@ async fn invoke_void<T: TupleDatum>(
             payload,
         ))
         .await
-        .map_err(|e| m_error!(mudu::error::ec::EC::NetErr, "invoke void procedure error", e))?
+        .map_err(|e| {
+            m_error!(
+                mudu::error::ec::EC::NetErr,
+                "invoke void procedure error",
+                e
+            )
+        })?
         .into_result();
     let result = procedure_invoke::deserialize_result(&result_binary)?;
     let _: () = result.to(&<() as TupleDatum>::tuple_desc_static(&[]))?;
@@ -399,7 +425,13 @@ async fn invoke_typed<T: TupleDatum, R: TupleDatum>(
             payload,
         ))
         .await
-        .map_err(|e| m_error!(mudu::error::ec::EC::NetErr, "invoke typed procedure error", e))?
+        .map_err(|e| {
+            m_error!(
+                mudu::error::ec::EC::NetErr,
+                "invoke typed procedure error",
+                e
+            )
+        })?
         .into_result();
     let result = procedure_invoke::deserialize_result(&result_binary)?;
     result.to(&<R as TupleDatum>::tuple_desc_static(&[]))
@@ -505,10 +537,18 @@ mod tests {
         let db_path = temp_dir("db");
         let mpk_path = temp_dir("mpk");
         fs::create_dir_all(&db_path).map_err(|e| {
-            mudu::m_error!(mudu::error::ec::EC::IOErr, "create tpcc benchmark db dir error", e)
+            mudu::m_error!(
+                mudu::error::ec::EC::IOErr,
+                "create tpcc benchmark db dir error",
+                e
+            )
         })?;
         fs::create_dir_all(&mpk_path).map_err(|e| {
-            mudu::m_error!(mudu::error::ec::EC::IOErr, "create tpcc benchmark mpk dir error", e)
+            mudu::m_error!(
+                mudu::error::ec::EC::IOErr,
+                "create tpcc benchmark mpk dir error",
+                e
+            )
         })?;
         let cfg = MuduDBCfg {
             mpk_path: mpk_path.to_string_lossy().into_owned(),

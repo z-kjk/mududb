@@ -3,11 +3,10 @@ use crate::backend::iouring_admin::spawn_management_thread;
 use crate::backend::mudu_app_mgr::MuduAppMgr;
 use crate::backend::mududb_cfg::MuduDBCfg;
 use mudu::common::result::RS;
-use mudu::error::ec::EC;
-use mudu::m_error;
 use mudu_kernel::server::routing::RoutingMode;
 use mudu_kernel::server::server::IoUringTcpBackend as KernelIoUringTcpBackend;
 use mudu_kernel::server::server::IoUringTcpServerConfig;
+use mudu_sys::task;
 use mudu_utils::notifier::{Waiter, notify_wait};
 use std::sync::Arc;
 
@@ -20,25 +19,15 @@ impl IoUringBackend {
     }
 
     pub fn sync_serve_with_stop(cfg: MuduDBCfg, stop: Waiter) -> RS<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                m_error!(
-                    EC::TokioErr,
-                    "create runtime for io_uring procedure bridge error",
-                    e
-                )
-            })?;
         let worker_count = cfg.effective_worker_threads();
         let app_mgr = Arc::new(MuduAppMgr::new(cfg.clone()));
-        let procedure_runtimes = runtime.block_on(async {
+        let procedure_runtimes = task::block_on_tokio_current_thread(async {
             let mut runtimes = Vec::with_capacity(worker_count);
             for _ in 0..worker_count {
                 runtimes.push(app_mgr.create_invoker(&cfg).await?);
             }
-            Ok(runtimes)
-        })?;
+            Ok::<_, mudu::error::err::MError>(runtimes)
+        })??;
         let routing_mode = match cfg.routing_mode {
             crate::backend::mududb_cfg::RoutingMode::ConnectionId => RoutingMode::ConnectionId,
             crate::backend::mududb_cfg::RoutingMode::PlayerId => RoutingMode::PlayerId,

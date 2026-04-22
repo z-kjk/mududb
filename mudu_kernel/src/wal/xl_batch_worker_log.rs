@@ -95,12 +95,11 @@ pub fn decode_xl_batches_with_pending(
     pending: &mut Vec<Vec<u8>>,
     pending_start_lsn: &mut Option<LSN>,
 ) -> RS<Vec<XLBatch>> {
-    Ok(
-        decode_entries_with_pending(frames, pending, pending_start_lsn)?
-            .into_iter()
-            .map(|(_, batch)| batch)
-            .collect(),
-    )
+    let mut out: Vec<XLBatch> = Vec::new();
+    for (_, batch) in decode_entries_with_pending::<XLBatch>(frames, pending, pending_start_lsn)? {
+        out.push(batch);
+    }
+    Ok(out)
 }
 
 pub fn append_xl_batch<B: WorkerLogBackend>(backend: &B, batch: &XLBatch) -> RS<()> {
@@ -140,7 +139,7 @@ mod tests {
                 ],
             });
         }
-        XLBatch { entries }
+        XLBatch::new(entries)
     }
 
     #[test]
@@ -183,9 +182,11 @@ mod tests {
         let batch = sample_batch(1, 32);
         let next_lsn = AtomicU32::new(0);
         let mut parts = serialize_batch(&batch, 4096, &next_lsn).unwrap();
-        parts[0][LOG_FRAME_HEADER_SIZE] ^= 0x7f;
+        let idx = parts[0].len() - LOG_FRAME_TAILER_SIZE - 1;
+        parts[0][idx] ^= 0x7f;
         let err = deserialize_batch(&parts).unwrap_err();
-        assert!(err.to_string().contains("checksum"));
+        let msg = err.to_string();
+        assert!(msg.contains("checksum"), "{}", msg);
     }
 
     #[test]

@@ -90,7 +90,11 @@ mod tests {
 
     #[test]
     fn result_batch_helpers_roundtrip_cursor_and_rows() {
-        let batch = ResultBatch::from(7, vec![TupleValue::from(vec![DatValue::from_i32(11)])], true);
+        let batch = ResultBatch::from(
+            7,
+            vec![TupleValue::from(vec![DatValue::from_i32(11)])],
+            true,
+        );
         let uni = result_batch_to_uni(batch).unwrap();
 
         assert!(uni.eof);
@@ -103,12 +107,15 @@ mod tests {
         let ok = serialize_fetch_result(Ok(ResultBatch::from(9, Vec::new(), true))).unwrap();
         let payload: UniResult<UniResultSet, UniError> = deserialize_from(&ok).unwrap().0;
         match payload {
-            UniResult::Ok(result_set) => assert_eq!(fetch_cursor_oid(&result_set.cursor).unwrap(), 9),
+            UniResult::Ok(result_set) => {
+                assert_eq!(fetch_cursor_oid(&result_set.cursor).unwrap(), 9)
+            }
             UniResult::Err(err) => panic!("unexpected error payload: {}", err.err_msg),
         }
 
-        let err = serialize_fetch_result(Err(mudu::m_error!(mudu::error::ec::EC::ParseErr, "boom")))
-            .unwrap();
+        let err =
+            serialize_fetch_result(Err(mudu::m_error!(mudu::error::ec::EC::ParseErr, "boom")))
+                .unwrap();
         let payload: UniResult<UniResultSet, UniError> = deserialize_from(&err).unwrap().0;
         match payload {
             UniResult::Ok(_) => panic!("expected error payload"),

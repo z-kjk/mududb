@@ -5,6 +5,9 @@ use std::task::{Context, Poll};
 use crossbeam_queue::SegQueue;
 use futures::task::waker;
 use mudu::common::result::RS;
+use mudu_utils::task::{try_this_task_id, PollTaskIdGuard};
+use mudu_utils::task_context::TaskContext;
+use mudu_utils::task_id::new_task_id;
 
 use crate::server::async_func_task_waker::AsyncFuncTaskWaker;
 use crate::server::worker_task::{WorkerTask, WorkerTaskFuture};
@@ -38,9 +41,15 @@ impl WorkerTaskRegistry {
 
     pub(in crate::server) fn spawn(&self, conn_id: Option<u64>, future: WorkerTaskFuture) {
         let task_id = self.next_task_id.fetch_add(1, Ordering::Relaxed);
+        let trace_task_id = new_task_id();
+        let task_name = match conn_id {
+            Some(conn_id) => format!("iouring-task-{task_id}-conn-{conn_id}"),
+            None => format!("iouring-system-task-{task_id}"),
+        };
+        let _ = TaskContext::new_context(trace_task_id, task_name, false);
         let _ = self
             .tasks
-            .insert_sync(task_id, WorkerTask::new(conn_id, future));
+            .insert_sync(task_id, WorkerTask::new(conn_id, trace_task_id, future));
         self.ready_queue.push(task_id);
     }
 
@@ -57,6 +66,10 @@ impl WorkerTaskRegistry {
             let Some(task) = self.tasks.get_sync(&task_id) else {
                 continue;
             };
+            if let Some(ctx) = TaskContext::get(task.trace_task_id()) {
+                ctx.watch("state", "ready");
+                ctx.watch("wake_op_id", &op_id.to_string());
+            }
             if !task.queued().swap(true, Ordering::AcqRel) {
                 self.ready_queue.push(task_id);
             }
@@ -69,6 +82,7 @@ impl WorkerTaskRegistry {
             let Some((_, mut task)) = self.tasks.remove_sync(&task_id) else {
                 continue;
             };
+            let trace_task_id = task.trace_task_id();
             task.clear_queued();
             if let Some(waiting_on) = task.take_waiting_on() {
                 let _ = self.op_registry.remove_sync(&waiting_on);
@@ -81,6 +95,14 @@ impl WorkerTaskRegistry {
                 task.completed().clone(),
             )));
             let mut cx = Context::from_waker(&waker);
+            let _poll_guard = PollTaskIdGuard::enter(trace_task_id);
+            if let Some(ctx) = TaskContext::get(trace_task_id) {
+                ctx.watch("state", "polling");
+                ctx.watch("poll_task_id", &task_id.to_string());
+                if let Some(active_id) = try_this_task_id() {
+                    ctx.watch("active_task_id", &active_id.to_string());
+                }
+            }
             match task.future_mut().poll(&mut cx) {
                 Poll::Ready(result) => completed.push(CompletedWorkerTask {
                     conn_id: task.conn_id(),
@@ -89,10 +111,16 @@ impl WorkerTaskRegistry {
                 }),
                 Poll::Pending => {
                     task.set_waiting_on(op_id);
+                    if let Some(ctx) = TaskContext::get(trace_task_id) {
+                        ctx.watch("state", "pending");
+                        ctx.watch("waiting_waker_op_id", &op_id.to_string());
+                    }
                     let _ = self.op_registry.insert_sync(op_id, task_id);
                     let _ = self.tasks.insert_sync(task_id, task);
+                    continue;
                 }
             }
+            TaskContext::remove_context(trace_task_id);
         }
         completed
     }

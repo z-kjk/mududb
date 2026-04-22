@@ -208,7 +208,10 @@ mod tests {
             "SELECT v FROM t WHERE id = 1",
         )))
         .await?;
-        assert_eq!(response_rows_as_strings(&selected), vec![vec!["20".to_string()]]);
+        assert_eq!(
+            response_rows_as_strings(&selected),
+            vec![vec!["20".to_string()]]
+        );
 
         let deleted = with_timeout(
             client.execute(ClientRequest::new("default", "DELETE FROM t WHERE id = 1")),
@@ -370,7 +373,10 @@ mod tests {
             "SELECT id FROM t WHERE id >= 3 AND id <= 3",
         )))
         .await?;
-        assert_eq!(response_rows_as_strings(&selected), vec![vec!["3".to_string()]]);
+        assert_eq!(
+            response_rows_as_strings(&selected),
+            vec![vec!["3".to_string()]]
+        );
 
         let selected = with_timeout(client.query(ClientRequest::new(
             "default",

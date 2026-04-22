@@ -570,16 +570,28 @@ pub mod object {
                 Some(0),
             );
 
-            let from_value = VoteActions::from_value(&action.to_value(VoteActions::dat_type()).unwrap()).unwrap();
+            let from_value =
+                VoteActions::from_value(&action.to_value(VoteActions::dat_type()).unwrap())
+                    .unwrap();
             assert_eq!(from_value.get_action_id().as_deref(), Some("a1"));
             assert_eq!(from_value.get_action_time(), &Some(10));
 
-            let from_binary = VoteActions::from_binary(action.to_binary(VoteActions::dat_type()).unwrap().as_ref()).unwrap();
+            let from_binary = VoteActions::from_binary(
+                action.to_binary(VoteActions::dat_type()).unwrap().as_ref(),
+            )
+            .unwrap();
             assert_eq!(from_binary.get_is_withdrawn(), &Some(0));
 
             let mut updated = VoteActions::new_empty();
-            updated.set_field_value("action_id", mudu_type::dat_value::DatValue::from_string("a2".to_string())).unwrap();
-            updated.set_field_value("is_withdrawn", mudu_type::dat_value::DatValue::from_i32(1)).unwrap();
+            updated
+                .set_field_value(
+                    "action_id",
+                    mudu_type::dat_value::DatValue::from_string("a2".to_string()),
+                )
+                .unwrap();
+            updated
+                .set_field_value("is_withdrawn", mudu_type::dat_value::DatValue::from_i32(1))
+                .unwrap();
             assert_eq!(updated.get_action_id().as_deref(), Some("a2"));
             assert_eq!(updated.get_is_withdrawn(), &Some(1));
         }

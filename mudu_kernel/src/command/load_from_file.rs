@@ -1,18 +1,19 @@
 use crate::contract::cmd_exec::CmdExec;
 use crate::contract::meta_mgr::MetaMgr;
+use crate::io::file;
 use crate::x_engine::api::{OptInsert, VecDatum, XContract};
 use crate::x_engine::tx_mgr::TxMgr;
-use async_std::fs::File;
 use async_trait::async_trait;
-use csv_async::StringRecord;
-use futures::StreamExt;
 use mudu::common::buf::Buf;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
 use mudu::error::ec::EC as ER;
 use mudu::m_error;
+use mudu_type::dat_type_id::DatTypeID;
+use std::io::Cursor;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 pub struct LoadFromFile {
     inner: Arc<Mutex<_LoadFromFile>>,
@@ -76,6 +77,13 @@ impl _LoadFromFile {
     }
 
     async fn prepare(&self) -> RS<()> {
+        debug!(
+            table_id = self.table_id,
+            csv_file = %self.csv_file,
+            key_cols = self.key_index.len(),
+            value_cols = self.value_index.len(),
+            "copy from prepare"
+        );
         let table_desc = self.meta_mgr.get_table_by_id(self.table_id).await?;
         if self.key_index.len() != table_desc.key_info().len()
             || self.value_index.len() != table_desc.value_info().len()
@@ -86,17 +94,52 @@ impl _LoadFromFile {
     }
 
     async fn load_table(&self) -> RS<u64> {
+        debug!(
+            table_id = self.table_id,
+            csv_file = %self.csv_file,
+            "copy from start loading"
+        );
         let table_desc = self.meta_mgr.get_table_by_id(self.table_id).await?;
-        let file = File::open(self.csv_file.clone()).await.map_err(|e| {
+        let file = file::open(&self.csv_file, libc::O_RDONLY | file::cloexec_flag(), 0)
+            .await
+            .map_err(|e| {
+                m_error!(
+                    ER::IOErr,
+                    format!("load failed, open csv file {} error, {}", self.csv_file, e)
+                )
+            })?;
+        let len = std::fs::metadata(&self.csv_file)
+            .map_err(|e| {
+                m_error!(
+                    ER::IOErr,
+                    format!("load failed, stat csv file {} error, {}", self.csv_file, e)
+                )
+            })?
+            .len() as usize;
+        let payload = file::read(&file, len, 0).await.map_err(|e| {
             m_error!(
                 ER::IOErr,
-                format!("load failed, open csv file {} error, {}", self.csv_file, e)
+                format!("load failed, read csv file {} error, {}", self.csv_file, e)
             )
         })?;
-        let mut reader = csv_async::AsyncReader::from_reader(file);
-        let mut records = reader.records();
+        file::close(file).await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!("load failed, close csv file {} error, {}", self.csv_file, e)
+            )
+        })?;
+
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(Cursor::new(payload));
         let mut rows = 0;
-        while let Some(record) = records.next().await {
+        for record in reader.records() {
+            debug!(
+                table_id = self.table_id,
+                csv_file = %self.csv_file,
+                rows,
+                "copy from waiting next csv record"
+            );
             let record = record.map_err(|e| {
                 m_error!(
                     ER::IOErr,
@@ -137,7 +180,25 @@ impl _LoadFromFile {
                 )
                 .await?;
             rows += 1;
+            debug!(
+                table_id = self.table_id,
+                csv_file = %self.csv_file,
+                rows,
+                "copy from inserted row"
+            );
         }
+        debug!(
+            table_id = self.table_id,
+            csv_file = %self.csv_file,
+            rows,
+            "copy from csv exhausted"
+        );
+        debug!(
+            table_id = self.table_id,
+            csv_file = %self.csv_file,
+            rows,
+            "copy from finished loading"
+        );
         Ok(rows)
     }
 
@@ -150,7 +211,7 @@ impl _LoadFromFile {
     }
 
     fn build_datum_from_line(
-        record: &StringRecord,
+        record: &csv::StringRecord,
         csv_index: &[usize],
         attr_indices: &[usize],
         table_desc: &crate::contract::table_desc::TableDesc,
@@ -164,8 +225,31 @@ impl _LoadFromFile {
             let field = table_desc.get_attr(attr_index);
             let dat_type = field.type_desc();
             let dat_id = dat_type.dat_type_id();
-            let internal = dat_id.fn_input()(textual, dat_type)
-                .map_err(|e| m_error!(ER::TypeBaseErr, "convert printable to internal error", e))?;
+            let internal = match dat_id.fn_input()(textual, dat_type) {
+                Ok(internal) => internal,
+                Err(first_err) => {
+                    if dat_id == DatTypeID::String {
+                        // COPY FROM accepts both JSON textual strings ("Alice")
+                        // and plain CSV cells (Alice) for string columns.
+                        let quoted = serde_json::to_string(textual).map_err(|e| {
+                            m_error!(ER::TypeBaseErr, "convert printable to internal error", e)
+                        })?;
+                        dat_id.fn_input()(&quoted, dat_type).map_err(|_| {
+                            m_error!(
+                                ER::TypeBaseErr,
+                                "convert printable to internal error",
+                                first_err
+                            )
+                        })?
+                    } else {
+                        return Err(m_error!(
+                            ER::TypeBaseErr,
+                            "convert printable to internal error",
+                            first_err
+                        ));
+                    }
+                }
+            };
             let binary: Buf = dat_id.fn_send()(&internal, dat_type)
                 .map_err(|e| m_error!(ER::TypeBaseErr, "converting internal to binary error", e))?
                 .into();

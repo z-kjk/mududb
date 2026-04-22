@@ -2,6 +2,8 @@ use crate::tuple::datum_desc::DatumDesc;
 use crate::tuple::enumerable_datum::EnumerableDatum;
 use crate::tuple::tuple_field_desc::TupleFieldDesc;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_type::dat_type::DatType;
 use mudu_type::dat_value::DatValue;
 use mudu_type::datum::DatumDyn;
@@ -11,7 +13,14 @@ pub trait VecDynDatum: EnumerableDatum {}
 impl EnumerableDatum for [&dyn DatumDyn] {
     fn to_value(&self, datum_desc: &[DatumDesc]) -> RS<Vec<DatValue>> {
         if datum_desc.len() != self.len() {
-            panic!("desc and vec length do not match");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "desc length {} and value length {} do not match",
+                    datum_desc.len(),
+                    self.len()
+                )
+            ));
         }
         let mut vec = Vec::with_capacity(self.len());
         for (i, t) in self.iter().enumerate() {
@@ -24,7 +33,14 @@ impl EnumerableDatum for [&dyn DatumDyn] {
 
     fn to_binary(&self, desc: &[DatumDesc]) -> RS<Vec<Vec<u8>>> {
         if desc.len() != self.len() {
-            panic!("desc and vec length do not match");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "desc length {} and value length {} do not match",
+                    desc.len(),
+                    self.len()
+                )
+            ));
         }
         let mut vec = Vec::with_capacity(self.len());
         for (i, t) in self.iter().enumerate() {

@@ -7,9 +7,8 @@ use mudu::common::xid::new_xid;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use scc::HashMap as SccHashMap;
-use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub(crate) struct WorkerSessionManager {
     session_owner: SccHashMap<OID, u64>,
@@ -20,12 +19,9 @@ pub(crate) struct WorkerSessionManager {
 }
 
 pub(crate) struct SessionContext {
-    tx_manager: UnsafeCell<Option<Arc<dyn TxMgr>>>,
+    tx_manager: Mutex<Option<Arc<dyn TxMgr>>>,
     mudu_conn_core: Arc<MuduConnCore>,
 }
-
-unsafe impl Send for SessionContext {}
-unsafe impl Sync for SessionContext {}
 
 impl WorkerSessionManager {
     pub(crate) fn new(active_sessions: Arc<AtomicUsize>, meta_mgr: Arc<dyn MetaMgr>) -> Self {
@@ -218,12 +214,12 @@ impl WorkerSessionManager {
     }
 
     pub(crate) fn has_session_tx(&self, session_id: OID) -> RS<bool> {
-        Ok(self.session_context(session_id)?.tx_manager_ref().is_some())
+        Ok(self.session_context(session_id)?.tx_manager_cloned().is_some())
     }
 
     pub(crate) fn begin_session_tx(&self, session_id: OID, tx_mgr: Arc<dyn TxMgr>) -> RS<()> {
         let session = self.session_context(session_id)?;
-        if session.tx_manager_ref().is_some() {
+        if session.tx_manager_cloned().is_some() {
             return Err(m_error!(
                 EC::ExistingSuchElement,
                 format!("session {} already has an active transaction", session_id)
@@ -248,7 +244,7 @@ impl WorkerSessionManager {
         F: FnOnce(Option<Arc<dyn TxMgr>>) -> RS<R>,
     {
         let session = self.session_context(session_id)?;
-        f(session.tx_manager_ref().clone())
+        f(session.tx_manager_cloned())
     }
 
     pub(crate) fn detach_connection_sessions(&self, conn_id: u64) -> RS<Vec<OID>> {
@@ -305,23 +301,30 @@ impl WorkerSessionManager {
 impl SessionContext {
     fn new(meta_mgr: Arc<dyn MetaMgr>) -> Self {
         Self {
-            tx_manager: UnsafeCell::new(None),
+            tx_manager: Mutex::new(None),
             mudu_conn_core: Arc::new(MuduConnCore::new(meta_mgr)),
         }
     }
 
-    pub(crate) fn tx_manager_ref(&self) -> &Option<Arc<dyn TxMgr>> {
-        unsafe { &*self.tx_manager.get() }
+    pub(crate) fn tx_manager_cloned(&self) -> Option<Arc<dyn TxMgr>> {
+        self.tx_manager
+            .lock()
+            .expect("session tx manager lock poisoned")
+            .clone()
     }
 
     pub(crate) fn set_tx_manager(&self, tx_manager: Option<Arc<dyn TxMgr>>) {
-        unsafe {
-            *self.tx_manager.get() = tx_manager;
-        }
+        *self
+            .tx_manager
+            .lock()
+            .expect("session tx manager lock poisoned") = tx_manager;
     }
 
     pub(crate) fn take_tx_manager(&self) -> Option<Arc<dyn TxMgr>> {
-        unsafe { (&mut *self.tx_manager.get()).take() }
+        self.tx_manager
+            .lock()
+            .expect("session tx manager lock poisoned")
+            .take()
     }
 
     pub(crate) fn mudu_conn_core(&self) -> Arc<MuduConnCore> {

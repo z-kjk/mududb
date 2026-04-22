@@ -52,7 +52,13 @@ pub fn spawn_management_thread(
                 }
             };
             runtime.block_on(async move {
-                let api = Arc::new(IoUringHttpApi::new(app_mgr, &cfg, worker_registry));
+                let api = match IoUringHttpApi::new(app_mgr, &cfg, worker_registry) {
+                    Ok(api) => Arc::new(api),
+                    Err(e) => {
+                        let _ = startup_tx.send(Err(e));
+                        return;
+                    }
+                };
                 let _ = startup_tx.send(Ok(()));
                 info!(
                     listen_ip = %cfg.listen_ip,

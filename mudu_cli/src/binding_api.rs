@@ -350,6 +350,18 @@ async fn post_http_json(
         .await
         .map_err(binding_error)?;
     let body = response.json::<Value>().await.map_err(binding_error)?;
+    if let Some(ok) = body.get("ok").and_then(Value::as_bool) {
+        if ok {
+            return Ok(body.get("data").cloned().unwrap_or(Value::Null));
+        }
+        let error = body.get("error").cloned().unwrap_or(Value::Null);
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("message").and_then(Value::as_str))
+            .unwrap_or("HTTP API request failed");
+        return Err(MuduCliBindingError::Message(format!("{}: {}", message, error)));
+    }
     let status = body
         .get("status")
         .and_then(Value::as_i64)

@@ -37,7 +37,10 @@ impl PartitionRouter {
         let Some(binding) = self.meta_mgr.get_table_partition_binding(table_id).await? else {
             return Ok(Some(DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID));
         };
-        let rule = self.meta_mgr.get_partition_rule_by_id(binding.rule_id).await?;
+        let rule = self
+            .meta_mgr
+            .get_partition_rule_by_id(binding.rule_id)
+            .await?;
         let route_tuple = build_route_tuple(table_desc, &binding.ref_attr_indices, key)?;
         let route_desc = build_route_tuple_desc(table_desc, &binding.ref_attr_indices)?;
 
@@ -77,13 +80,22 @@ impl PartitionRouter {
         let Some(binding) = self.meta_mgr.get_table_partition_binding(table_id).await? else {
             return Ok(Some(vec![DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID]));
         };
-        let rule = self.meta_mgr.get_partition_rule_by_id(binding.rule_id).await?;
+        let rule = self
+            .meta_mgr
+            .get_partition_rule_by_id(binding.rule_id)
+            .await?;
         let route_desc = build_route_tuple_desc(table_desc, &binding.ref_attr_indices)?;
         let start_tuple = build_route_bound_tuple(table_desc, &binding.ref_attr_indices, start)?;
         let end_tuple = build_route_bound_tuple(table_desc, &binding.ref_attr_indices, end)?;
         let mut partitions = Vec::new();
         for partition in &rule.partitions {
-            if partition_overlaps(&rule, &route_desc, partition.partition_id, &start_tuple, &end_tuple)? {
+            if partition_overlaps(
+                &rule,
+                &route_desc,
+                partition.partition_id,
+                &start_tuple,
+                &end_tuple,
+            )? {
                 partitions.push(partition.partition_id);
             }
         }
@@ -133,8 +145,13 @@ impl PartitionRouter {
         let end_tuple = build_rule_bound_tuple(&route_desc, end)?;
         let mut partitions = Vec::new();
         for partition in &rule.partitions {
-            if partition_overlaps(rule, &route_desc, partition.partition_id, &start_tuple, &end_tuple)?
-            {
+            if partition_overlaps(
+                rule,
+                &route_desc,
+                partition.partition_id,
+                &start_tuple,
+                &end_tuple,
+            )? {
                 partitions.push(partition.partition_id);
             }
         }
@@ -155,8 +172,12 @@ fn build_rule_bound_tuple(
     bound: &Bound<Vec<Vec<u8>>>,
 ) -> RS<Bound<Vec<u8>>> {
     match bound {
-        Bound::Included(values) => Ok(Bound::Included(build_partition_bound_tuple(route_desc, values)?)),
-        Bound::Excluded(values) => Ok(Bound::Excluded(build_partition_bound_tuple(route_desc, values)?)),
+        Bound::Included(values) => Ok(Bound::Included(build_partition_bound_tuple(
+            route_desc, values,
+        )?)),
+        Bound::Excluded(values) => Ok(Bound::Excluded(build_partition_bound_tuple(
+            route_desc, values,
+        )?)),
         Bound::Unbounded => Ok(Bound::Unbounded),
     }
 }
@@ -172,7 +193,12 @@ fn partition_overlaps(
         .partitions
         .iter()
         .find(|partition| partition.partition_id == partition_id)
-        .ok_or_else(|| m_error!(EC::NoSuchElement, format!("no such partition {}", partition_id)))?;
+        .ok_or_else(|| {
+            m_error!(
+                EC::NoSuchElement,
+                format!("no such partition {}", partition_id)
+            )
+        })?;
 
     let start_ok = match (end, &partition.start) {
         (Bound::Unbounded, _) | (_, PartitionBound::Unbounded) => true,
@@ -252,25 +278,37 @@ fn build_partition_bound_tuple(route_desc: &TupleBinaryDesc, values: &[Vec<u8>])
     for (index, textual) in values.iter().enumerate() {
         let field_desc = route_desc.get_field_desc(index);
         let dat_type = field_desc.type_obj();
-        binaries.push(textual_to_binary(dat_type.dat_type_id(), dat_type, textual)?);
+        binaries.push(textual_to_binary(
+            dat_type.dat_type_id(),
+            dat_type,
+            textual,
+        )?);
     }
     build_tuple(&binaries, route_desc)
 }
 
-fn textual_to_binary(data_type_id: DatTypeID, dat_type: &mudu_type::dat_type::DatType, raw: &[u8]) -> RS<Vec<u8>> {
+fn textual_to_binary(
+    data_type_id: DatTypeID,
+    dat_type: &mudu_type::dat_type::DatType,
+    raw: &[u8],
+) -> RS<Vec<u8>> {
     let text = String::from_utf8(raw.to_vec())
         .map_err(|e| m_error!(EC::DecodeErr, "partition bound text is not utf8", e))?;
     let normalized = strip_text_literal_quotes(text.trim());
     let datum: Box<dyn DatumDyn> = match data_type_id {
         DatTypeID::I32 => Box::new(<i32 as mudu_type::datum::Datum>::from_textual(&normalized)?),
         DatTypeID::I64 => Box::new(<i64 as mudu_type::datum::Datum>::from_textual(&normalized)?),
-        DatTypeID::I128 => Box::new(<i128 as mudu_type::datum::Datum>::from_textual(&normalized)?),
-        DatTypeID::U128 => Box::new(<u128 as mudu_type::datum::Datum>::from_textual(&normalized)?),
+        DatTypeID::I128 => Box::new(<i128 as mudu_type::datum::Datum>::from_textual(
+            &normalized,
+        )?),
+        DatTypeID::U128 => Box::new(<u128 as mudu_type::datum::Datum>::from_textual(
+            &normalized,
+        )?),
         DatTypeID::F32 => Box::new(<f32 as mudu_type::datum::Datum>::from_textual(&normalized)?),
         DatTypeID::F64 => Box::new(<f64 as mudu_type::datum::Datum>::from_textual(&normalized)?),
-        DatTypeID::String => {
-            Box::new(<String as mudu_type::datum::Datum>::from_textual(&normalized)?)
-        }
+        DatTypeID::String => Box::new(<String as mudu_type::datum::Datum>::from_textual(
+            &normalized,
+        )?),
         _ => {
             return Err(m_error!(
                 EC::NotImplemented,
@@ -309,7 +347,10 @@ mod tests {
             if self.table_desc.id() == oid {
                 Ok(self.table_desc.clone())
             } else {
-                Err(m_error!(EC::NoSuchElement, format!("no such table {}", oid)))
+                Err(m_error!(
+                    EC::NoSuchElement,
+                    format!("no such table {}", oid)
+                ))
             }
         }
 

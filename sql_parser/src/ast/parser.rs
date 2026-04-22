@@ -15,6 +15,7 @@ use crate::ast::expr_visitor::ExprVisitor;
 use crate::ast::expression::ExprType;
 use crate::ast::select_term::SelectTerm;
 use crate::ast::stmt_copy_from::StmtCopyFrom;
+use crate::ast::stmt_copy_to::StmtCopyTo;
 use crate::ast::stmt_create_partition_placement::{
     StmtCreatePartitionPlacement, StmtPartitionPlacementItem,
 };
@@ -239,9 +240,12 @@ impl SQLParser {
     }
 
     fn parse_create_table_partitioned_custom(&self, sql: &str) -> RS<StmtCreateTable> {
-        let close_index = find_matching_paren(sql, sql.find('(').ok_or_else(|| {
-            m_error!(EC::ParseErr, "partitioned create table has no column list")
-        })?)?;
+        let close_index = find_matching_paren(
+            sql,
+            sql.find('(').ok_or_else(|| {
+                m_error!(EC::ParseErr, "partitioned create table has no column list")
+            })?,
+        )?;
         let base_sql = sql[..=close_index].trim();
         let suffix = sql[close_index + 1..].trim();
 
@@ -262,9 +266,8 @@ impl SQLParser {
     fn parse_create_partition_rule_custom(&self, sql: &str) -> RS<StmtCreatePartitionRule> {
         let prefix = "create partition rule ";
         let rest = sql[prefix.len()..].trim();
-        let range_pos = find_keyword_position(rest, "range").ok_or_else(|| {
-            m_error!(EC::ParseErr, "create partition rule must contain RANGE")
-        })?;
+        let range_pos = find_keyword_position(rest, "range")
+            .ok_or_else(|| m_error!(EC::ParseErr, "create partition rule must contain RANGE"))?;
         let rule_name = rest[..range_pos].trim();
         if rule_name.is_empty() {
             return Err(m_error!(EC::ParseErr, "partition rule name is empty"));
@@ -284,7 +287,10 @@ impl SQLParser {
         for def in defs {
             partitions.push(parse_range_partition_def(def)?);
         }
-        Ok(StmtCreatePartitionRule::new(rule_name.to_string(), partitions))
+        Ok(StmtCreatePartitionRule::new(
+            rule_name.to_string(),
+            partitions,
+        ))
     }
 
     fn parse_create_partition_placement_custom(
@@ -480,8 +486,29 @@ impl SQLParser {
         Ok(st)
     }
 
-    fn visit_copy_to_stmt(&self, _context: &ParseContext, _node: Node) -> RS<StmtType> {
-        todo!()
+    fn visit_copy_to_stmt(&self, context: &ParseContext, node: Node) -> RS<StmtType> {
+        // tree-sitter `copy_to` currently does not expose field names for children.
+        let mut object_ref = node.child_by_field_name(ts_field_name::OBJECT_REFERENCE);
+        let mut file_path = node.child_by_field_name(ts_field_name::FILE_PATH);
+        for i in 0..node.child_count() {
+            let child = node.child(i as _).unwrap();
+            if object_ref.is_none() && child.kind_id() == ts_kind_id::OBJECT_REFERENCE {
+                object_ref = Some(child);
+            } else if file_path.is_none() && child.kind_id() == ts_kind_id::FILE_PATH {
+                file_path = Some(child);
+            }
+        }
+
+        let n_obj_ref = rs_of_opt(object_ref, || {
+            m_error!(EC::ParseErr, "no object reference field")
+        })?;
+        let table_name = self.visit_object_reference(context, n_obj_ref)?;
+        let n_file_path = rs_of_opt(file_path, || {
+            m_error!(EC::ParseErr, "no object file path field")
+        })?;
+        let file_path = self.visit_string(context, n_file_path)?;
+        let copy_to = StmtCopyTo::new(file_path, table_name, vec![]);
+        Ok(StmtType::Command(StmtCommand::CopyTo(copy_to)))
     }
 
     fn visit_drop_statement(&self, context: &ParseContext, node: Node) -> RS<StmtDropTable> {
@@ -610,10 +637,13 @@ impl SQLParser {
                 ExprValue::ValuePlaceholder,
             ))));
         }
-        panic!(
-            "unknown expression {}",
-            ts_node_context_string(&context.parse_str(), &node)?
-        )
+        Err(m_error!(
+            EC::ParseErr,
+            format!(
+                "unknown expression {}",
+                ts_node_context_string(&context.parse_str(), &node)?
+            )
+        ))
     }
 
     fn visit_literal(&self, context: &ParseContext, node: Node) -> RS<ExprLiteral> {
@@ -678,8 +708,7 @@ impl SQLParser {
 
     fn visit_operator(&self, context: &ParseContext, node: Node) -> RS<Operator> {
         let op_string = ts_node_context_string(context.parse_str(), &node)?;
-        let op = Operator::from_str(op_string);
-        Ok(op)
+        Operator::from_str(op_string)
     }
 
     fn visit_relation(&self, context: &ParseContext, node: Node, stmt: &mut StmtSelect) -> RS<()> {
@@ -1169,7 +1198,9 @@ fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
 }
 
 fn contains_ignore_ascii_case(input: &str, needle: &str) -> bool {
-    input.to_ascii_lowercase().contains(&needle.to_ascii_lowercase())
+    input
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
 }
 
 fn find_keyword_position(input: &str, keyword: &str) -> Option<usize> {
@@ -1230,9 +1261,8 @@ fn parse_table_partition_suffix(input: &str) -> RS<StmtTablePartition> {
         ));
     }
     let rest = input[prefix.len()..].trim();
-    let references_pos = find_keyword_position(rest, "references").ok_or_else(|| {
-        m_error!(EC::ParseErr, "partition clause must contain REFERENCES")
-    })?;
+    let references_pos = find_keyword_position(rest, "references")
+        .ok_or_else(|| m_error!(EC::ParseErr, "partition clause must contain REFERENCES"))?;
     let rule_name = rest[..references_pos].trim();
     let refs = rest[references_pos + "references".len()..].trim();
     if !refs.starts_with('(') {
@@ -1262,20 +1292,25 @@ fn parse_range_partition_def(input: &str) -> RS<StmtRangePartition> {
         ));
     }
     let rest = input[prefix.len()..].trim();
-    let values_pos = find_keyword_position(rest, "values").ok_or_else(|| {
-        m_error!(EC::ParseErr, "partition definition must contain VALUES")
-    })?;
+    let values_pos = find_keyword_position(rest, "values")
+        .ok_or_else(|| m_error!(EC::ParseErr, "partition definition must contain VALUES"))?;
     let name = rest[..values_pos].trim();
     let after_values = rest[values_pos + "values".len()..].trim();
     if !starts_with_ignore_ascii_case(after_values, "from") {
-        return Err(m_error!(EC::ParseErr, "partition definition must contain FROM"));
+        return Err(m_error!(
+            EC::ParseErr,
+            "partition definition must contain FROM"
+        ));
     }
     let after_from = after_values["from".len()..].trim();
     let from_close = find_matching_paren(after_from, 0)?;
     let start = parse_partition_bound(&after_from[..=from_close])?;
     let after_start = after_from[from_close + 1..].trim();
     if !starts_with_ignore_ascii_case(after_start, "to") {
-        return Err(m_error!(EC::ParseErr, "partition definition must contain TO"));
+        return Err(m_error!(
+            EC::ParseErr,
+            "partition definition must contain TO"
+        ));
     }
     let after_to = after_start["to".len()..].trim();
     let end_close = find_matching_paren(after_to, 0)?;
@@ -1286,7 +1321,10 @@ fn parse_range_partition_def(input: &str) -> RS<StmtRangePartition> {
 fn parse_partition_bound(input: &str) -> RS<StmtPartitionBound> {
     let trimmed = input.trim();
     if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
-        return Err(m_error!(EC::ParseErr, "partition bound must be parenthesized"));
+        return Err(m_error!(
+            EC::ParseErr,
+            "partition bound must be parenthesized"
+        ));
     }
     let items = split_top_level_csv(&trimmed[1..trimmed.len() - 1]);
     if items.len() == 1

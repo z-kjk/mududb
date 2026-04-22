@@ -2,6 +2,8 @@ use crate::universal::uni_dat_type_id::UniDatTypeId;
 use mudu::common::into_result::ToResult;
 use mudu::common::result::RS;
 use mudu::common::result_from::ResultFrom;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_type::dat_type_id::DatTypeID;
 
 impl UniDatTypeId {
@@ -16,9 +18,8 @@ impl UniDatTypeId {
             Self::String => DatTypeID::String,
             Self::Array => DatTypeID::Array,
             Self::Record => DatTypeID::Record,
-            _ => {
-                unimplemented!()
-            }
+            Self::Binary => DatTypeID::Binary,
+            _ => return Err(m_error!(EC::TypeErr, "unsupported universal data type id")),
         };
         Ok(ty_id)
     }

@@ -49,7 +49,10 @@ fn to_arb_err(e: TyErr) -> arbitrary::Error {
     arbitrary::Error::IncorrectFormat
 }
 
-pub fn fn_object_arb_typed(u: &mut Unstructured, dat_type: &DatType) -> arbitrary::Result<DatValue> {
+pub fn fn_object_arb_typed(
+    u: &mut Unstructured,
+    dat_type: &DatType,
+) -> arbitrary::Result<DatValue> {
     let param = dat_type.expect_record_param();
     let mut fields = Vec::with_capacity(param.fields().len());
     for (_, field_ty) in param.fields() {
@@ -59,7 +62,10 @@ pub fn fn_object_arb_typed(u: &mut Unstructured, dat_type: &DatType) -> arbitrar
     Ok(DatValue::from_record(fields))
 }
 
-pub fn fn_object_arb_printable(u: &mut Unstructured, dat_type: &DatType) -> arbitrary::Result<String> {
+pub fn fn_object_arb_printable(
+    u: &mut Unstructured,
+    dat_type: &DatType,
+) -> arbitrary::Result<String> {
     let value = fn_object_arb_typed(u, dat_type)?;
     let textual = fn_object_out(&value, dat_type).map_err(to_arb_err)?;
     Ok(textual.into())

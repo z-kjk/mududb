@@ -15,14 +15,42 @@ fn assert_ty_ec(err: TyErr, ec: TyEC) {
 #[test]
 fn invalid_textual_input_paths_return_type_convert_failed() {
     let cases = vec![
-        (DatTypeID::I32, DatType::new_no_param(DatTypeID::I32), "\"bad\""),
-        (DatTypeID::I64, DatType::new_no_param(DatTypeID::I64), "\"bad\""),
-        (DatTypeID::F32, DatType::new_no_param(DatTypeID::F32), "\"bad\""),
-        (DatTypeID::F64, DatType::new_no_param(DatTypeID::F64), "\"bad\""),
+        (
+            DatTypeID::I32,
+            DatType::new_no_param(DatTypeID::I32),
+            "\"bad\"",
+        ),
+        (
+            DatTypeID::I64,
+            DatType::new_no_param(DatTypeID::I64),
+            "\"bad\"",
+        ),
+        (
+            DatTypeID::F32,
+            DatType::new_no_param(DatTypeID::F32),
+            "\"bad\"",
+        ),
+        (
+            DatTypeID::F64,
+            DatType::new_no_param(DatTypeID::F64),
+            "\"bad\"",
+        ),
         (DatTypeID::String, create_string_type(Some(8)), "not-json"),
-        (DatTypeID::U128, DatType::new_no_param(DatTypeID::U128), "\"not-a-u128\""),
-        (DatTypeID::I128, DatType::new_no_param(DatTypeID::I128), "\"not-an-i128\""),
-        (DatTypeID::Binary, DatType::new_no_param(DatTypeID::Binary), "{\"oops\":1}"),
+        (
+            DatTypeID::U128,
+            DatType::new_no_param(DatTypeID::U128),
+            "\"not-a-u128\"",
+        ),
+        (
+            DatTypeID::I128,
+            DatType::new_no_param(DatTypeID::I128),
+            "\"not-an-i128\"",
+        ),
+        (
+            DatTypeID::Binary,
+            DatType::new_no_param(DatTypeID::Binary),
+            "{\"oops\":1}",
+        ),
         (
             DatTypeID::Array,
             create_array_type(DatType::new_no_param(DatTypeID::I32)),
@@ -47,14 +75,42 @@ fn invalid_textual_input_paths_return_type_convert_failed() {
 #[test]
 fn textual_input_rejects_json_with_wrong_shape() {
     let cases = vec![
-        (DatTypeID::I32, DatType::new_no_param(DatTypeID::I32), "{\"abc\""),
-        (DatTypeID::I64, DatType::new_no_param(DatTypeID::I64), "{\"abc\""),
-        (DatTypeID::F32, DatType::new_no_param(DatTypeID::F32), "{\"abc\""),
-        (DatTypeID::F64, DatType::new_no_param(DatTypeID::F64), "{\"abc\""),
+        (
+            DatTypeID::I32,
+            DatType::new_no_param(DatTypeID::I32),
+            "{\"abc\"",
+        ),
+        (
+            DatTypeID::I64,
+            DatType::new_no_param(DatTypeID::I64),
+            "{\"abc\"",
+        ),
+        (
+            DatTypeID::F32,
+            DatType::new_no_param(DatTypeID::F32),
+            "{\"abc\"",
+        ),
+        (
+            DatTypeID::F64,
+            DatType::new_no_param(DatTypeID::F64),
+            "{\"abc\"",
+        ),
         (DatTypeID::String, create_string_type(Some(8)), "{ 123"),
-        (DatTypeID::U128, DatType::new_no_param(DatTypeID::U128), "{true"),
-        (DatTypeID::I128, DatType::new_no_param(DatTypeID::I128), "{ false"),
-        (DatTypeID::Binary, DatType::new_no_param(DatTypeID::Binary), "{ [\"bad\"]"),
+        (
+            DatTypeID::U128,
+            DatType::new_no_param(DatTypeID::U128),
+            "{true",
+        ),
+        (
+            DatTypeID::I128,
+            DatType::new_no_param(DatTypeID::I128),
+            "{ false",
+        ),
+        (
+            DatTypeID::Binary,
+            DatType::new_no_param(DatTypeID::Binary),
+            "{ [\"bad\"]",
+        ),
         (
             DatTypeID::Array,
             create_array_type(DatType::new_no_param(DatTypeID::I32)),
@@ -83,18 +139,14 @@ fn string_error_paths_return_expected_error_codes() {
     let err = DatTypeID::String.fn_input()("not-json", &dt).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
-    let err = DatTypeID::String
-        .fn_input_json()(&JsonValue::Bool(true), &dt)
-        .unwrap_err();
+    let err = DatTypeID::String.fn_input_json()(&JsonValue::Bool(true), &dt).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
     let err = DatTypeID::String.fn_recv()(&[0, 0], &dt).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
     let value = DatValue::from_string("abcdef".to_string());
-    let err = DatTypeID::String
-        .fn_send_to()(&value, &dt, &mut [0u8; 4])
-        .unwrap_err();
+    let err = DatTypeID::String.fn_send_to()(&value, &dt, &mut [0u8; 4]).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 }
 
@@ -102,26 +154,22 @@ fn string_error_paths_return_expected_error_codes() {
 fn binary_error_paths_return_expected_error_codes() {
     let dt = DatType::new_no_param(DatTypeID::Binary);
 
-    let err = DatTypeID::Binary
-        .fn_input_json()(&JsonValue::String("oops".to_string()), &dt)
-        .unwrap_err();
+    let err =
+        DatTypeID::Binary.fn_input_json()(&JsonValue::String("oops".to_string()), &dt).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
-    let err = DatTypeID::Binary
-        .fn_input_json()(
-            &JsonValue::Array(vec![JsonValue::String("bad".to_string())]),
-            &dt,
-        )
-        .unwrap_err();
+    let err = DatTypeID::Binary.fn_input_json()(
+        &JsonValue::Array(vec![JsonValue::String("bad".to_string())]),
+        &dt,
+    )
+    .unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
     let err = DatTypeID::Binary.fn_recv()(&[0, 0, 0], &dt).unwrap_err();
     assert_ty_ec(err, TyEC::InsufficientSpace);
 
     let value = DatValue::from_binary(vec![1, 2, 3]);
-    let err = DatTypeID::Binary
-        .fn_send_to()(&value, &dt, &mut [0u8; 2])
-        .unwrap_err();
+    let err = DatTypeID::Binary.fn_send_to()(&value, &dt, &mut [0u8; 2]).unwrap_err();
     assert_ty_ec(err, TyEC::InsufficientSpace);
 }
 
@@ -129,17 +177,15 @@ fn binary_error_paths_return_expected_error_codes() {
 fn array_error_paths_return_expected_error_codes() {
     let dt = create_array_type(DatType::new_no_param(DatTypeID::I32));
 
-    let err = DatTypeID::Array
-        .fn_input_json()(&JsonValue::String("oops".to_string()), &dt)
-        .unwrap_err();
+    let err =
+        DatTypeID::Array.fn_input_json()(&JsonValue::String("oops".to_string()), &dt).unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
-    let err = DatTypeID::Array
-        .fn_input_json()(
-            &JsonValue::Array(vec![JsonValue::String("bad".to_string())]),
-            &dt,
-        )
-        .unwrap_err();
+    let err = DatTypeID::Array.fn_input_json()(
+        &JsonValue::Array(vec![JsonValue::String("bad".to_string())]),
+        &dt,
+    )
+    .unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
     let err = DatTypeID::Array.fn_recv()(&[0, 0, 0, 0], &dt).unwrap_err();
@@ -156,31 +202,30 @@ fn object_error_paths_return_expected_error_codes() {
         ],
     );
 
-    let err = DatTypeID::Record
-        .fn_input_json()(
-            &JsonValue::Object(
-                [("name".to_string(), JsonValue::String("neo".to_string()))]
-                    .into_iter()
-                    .collect(),
-            ),
-            &dt,
-        )
-        .unwrap_err();
+    let err = DatTypeID::Record.fn_input_json()(
+        &JsonValue::Object(
+            [("name".to_string(), JsonValue::String("neo".to_string()))]
+                .into_iter()
+                .collect(),
+        ),
+        &dt,
+    )
+    .unwrap_err();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
-    let err = DatTypeID::Record
-        .fn_output_json()(&DatValue::from_record(vec![DatValue::from_string("neo".to_string())]), &dt)
-        .err()
-        .unwrap();
+    let err = DatTypeID::Record.fn_output_json()(
+        &DatValue::from_record(vec![DatValue::from_string("neo".to_string())]),
+        &dt,
+    )
+    .err()
+    .unwrap();
     assert_ty_ec(err, TyEC::TypeConvertFailed);
 
     let value = DatValue::from_record(vec![
         DatValue::from_string("neo".to_string()),
         DatValue::from_i32(7),
     ]);
-    let err = DatTypeID::Record
-        .fn_send_to()(&value, &dt, &mut [0u8; 4])
-        .unwrap_err();
+    let err = DatTypeID::Record.fn_send_to()(&value, &dt, &mut [0u8; 4]).unwrap_err();
     assert_ty_ec(err, TyEC::InsufficientSpace);
 
     let err = DatTypeID::Record.fn_recv()(&[0, 0, 0, 0], &dt).unwrap_err();

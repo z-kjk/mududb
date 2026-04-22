@@ -2,13 +2,14 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use mudu_contract::protocol::{Frame, FrameHeader, HEADER_LEN};
-
+use mudu_utils::task_trace;
 use crate::io::socket::{recv_into, send_all, IoSocket};
 
 pub(in crate::server) async fn read_next_frame(
     socket: &IoSocket,
     read_buf: &mut Vec<u8>,
 ) -> RS<Option<Frame>> {
+    task_trace!();
     let mut header_buf = [0u8; HEADER_LEN];
     match read_exact(socket, &mut header_buf).await? {
         Some(()) => {}
@@ -32,6 +33,7 @@ pub(in crate::server) async fn read_next_frame(
 }
 
 pub(in crate::server) async fn write_response(socket: &IoSocket, payload: &[u8]) -> RS<()> {
+    task_trace!();
     send_all(socket, payload).await
 }
 

@@ -11,6 +11,12 @@ pub struct XLBatch {
     pub entries: Vec<XLEntry>,
 }
 
+impl XLBatch {
+    pub fn new(entries: Vec<XLEntry>) -> Self {
+        Self { entries }
+    }
+}
+
 pub use crate::wal::xl_batch_worker_log::{
     append_xl_batch, append_xl_batch_async, decode_xl_batches, decode_xl_batches_with_pending,
     deserialize_batch, new_xl_batch_worker_log, new_xl_batch_writer, serialize_batch,

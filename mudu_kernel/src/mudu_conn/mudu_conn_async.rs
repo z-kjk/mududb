@@ -10,9 +10,9 @@ use mudu_contract::database::result_set::ResultSetAsync;
 use mudu_contract::database::sql_params::SQLParams;
 use mudu_contract::database::sql_stmt::SQLStmt;
 use mudu_contract::protocol::{
-    ClientRequest, Frame, HEADER_LEN, MessageType, SessionCreateRequest, decode_error_response,
-    decode_server_response, decode_session_create_response, encode_batch_request,
-    encode_client_request_with_message_type, encode_session_create_request,
+    decode_error_response, decode_server_response, decode_session_create_response,
+    encode_batch_request, encode_client_request_with_message_type, encode_session_create_request,
+    ClientRequest, Frame, FrameHeader, MessageType, SessionCreateRequest, HEADER_LEN,
 };
 use sql_parser::ast::parser::SQLParser;
 use sql_parser::ast::stmt_type::StmtType;
@@ -22,7 +22,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::mudu_conn::mudu_prepared_stmt::MuduPreparedStmt;
-use crate::server::worker_local::{WorkerExecute, WorkerLocalRef, try_current_worker_local};
+use crate::server::worker_local::{try_current_worker_local, WorkerExecute, WorkerLocalRef};
 use crate::sql::describer::Describer;
 
 static DEFAULT_REMOTE_ADDR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -78,17 +78,20 @@ fn default_remote_worker_id() -> Option<OID> {
 }
 
 impl MuduConnAsync {
-    pub fn new() -> Self {
+    pub fn new() -> RS<Self> {
         if let Some(worker_local) = try_current_worker_local() {
-            return Self {
+            return Ok(Self {
                 backend: ConnBackend::WorkerLocal(worker_local),
                 parser: Arc::new(SQLParser::new()),
                 session_id: Arc::new(AsyncMutex::new(None)),
-            };
+            });
         }
-        let addr = default_remote_addr().unwrap_or_else(|| {
-            panic!("current worker local is not set and no default remote mududb addr is configured")
-        });
+        let addr = default_remote_addr().ok_or_else(|| {
+            m_error!(
+                EC::NoSuchElement,
+                "current worker local is not set and no default remote mududb addr is configured"
+            )
+        })?;
         let parser = Arc::new(SQLParser::new());
         let remote = Arc::new(RemoteWorkerConn {
             addr,
@@ -96,11 +99,11 @@ impl MuduConnAsync {
             session_id: AsyncMutex::new(None),
             stream: AsyncMutex::new(None),
         });
-        Self {
+        Ok(Self {
             backend: ConnBackend::Remote(remote),
             parser,
             session_id: Arc::new(AsyncMutex::new(None)),
-        }
+        })
     }
 
     fn parse_one(&self, sql: &dyn SQLStmt) -> RS<StmtType> {
@@ -157,19 +160,15 @@ impl RemoteWorkerConn {
             .as_mut()
             .ok_or_else(|| m_error!(EC::InternalErr, "remote worker client is missing"))?;
         let request_id = client.take_request_id();
-        let config_json = self
-            .worker_id
-            .map(|worker_id| {
-                serde_json::json!({
-                    "session_id": 0,
-                    "worker_id": worker_id.to_string()
-                })
-                .to_string()
-            });
-        let payload = encode_session_create_request(
-            request_id,
-            &SessionCreateRequest::new(config_json),
-        )?;
+        let config_json = self.worker_id.map(|worker_id| {
+            serde_json::json!({
+                "session_id": 0,
+                "worker_id": worker_id.to_string()
+            })
+            .to_string()
+        });
+        let payload =
+            encode_session_create_request(request_id, &SessionCreateRequest::new(config_json))?;
         let frame = client.send_and_receive(&payload).await?;
         let session_id = decode_session_create_response(&frame)?.session_id();
         *guard = Some(session_id);
@@ -250,8 +249,7 @@ impl RemoteProtocolClient {
             .read_exact(&mut header)
             .await
             .map_err(|e| m_error!(EC::NetErr, "read response header error", e))?;
-        let payload_len =
-            u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+        let payload_len = FrameHeader::decode_header_bytes(&header)?.payload_len() as usize;
         let mut frame_bytes = Vec::with_capacity(HEADER_LEN + payload_len);
         frame_bytes.extend_from_slice(&header);
         if payload_len > 0 {

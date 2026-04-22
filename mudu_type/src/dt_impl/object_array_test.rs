@@ -115,9 +115,7 @@ fn object_roundtrip_with_nested_array_field() {
     assert_binary_roundtrip(DatTypeID::Record, &dt, &value);
 
     let json = DatTypeID::Record.fn_output_json()(&value, &dt).unwrap();
-    let parsed = DatTypeID::Record
-        .fn_input_json()(&json.into_json_value(), &dt)
-        .unwrap();
+    let parsed = DatTypeID::Record.fn_input_json()(&json.into_json_value(), &dt).unwrap();
     assert_eq!(
         DatTypeID::Record.fn_send()(&parsed, &dt).unwrap().as_ref(),
         DatTypeID::Record.fn_send()(&value, &dt).unwrap().as_ref()

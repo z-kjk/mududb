@@ -49,10 +49,7 @@ fn sync_standalone_kv_and_sql_wrappers_work() {
     let setup = SQLStmtText::new(
         "CREATE TABLE demo(id INT PRIMARY KEY); INSERT INTO demo(id) VALUES (7);".to_string(),
     );
-    assert_eq!(
-        sync_api::mudu_batch(session_id, &setup, &()).unwrap(),
-        1
-    );
+    assert_eq!(sync_api::mudu_batch(session_id, &setup, &()).unwrap(), 1);
 
     let insert = SQLStmtText::new("INSERT INTO demo(id) VALUES (?1)".to_string());
     assert_eq!(
@@ -137,19 +134,13 @@ fn async_standalone_kv_and_sql_wrappers_work() {
         mudu_adapter::syscall::set_db_path(&db_path);
 
         let session_id = async_api::mudu_open().await.unwrap();
-        async_api::mudu_put(session_id, b"k1", b"v1")
-            .await
-            .unwrap();
+        async_api::mudu_put(session_id, b"k1", b"v1").await.unwrap();
         assert_eq!(
-            async_api::mudu_get(session_id, b"k1")
-                .await
-                .unwrap(),
+            async_api::mudu_get(session_id, b"k1").await.unwrap(),
             Some(b"v1".to_vec())
         );
         assert_eq!(
-            async_api::mudu_range(session_id, b"k1", b"")
-                .await
-                .unwrap(),
+            async_api::mudu_range(session_id, b"k1", b"").await.unwrap(),
             vec![(b"k1".to_vec(), b"v1".to_vec())]
         );
 
@@ -191,19 +182,18 @@ fn async_bytes_kv_flow_roundtrips() {
         let put_out = async_api::mudu_put_bytes(&put_in).await.unwrap();
         host::deserialize_put_result(&put_out).unwrap();
 
-        let get_out = async_api::mudu_get_bytes(
-            &host::serialize_session_get_param(session_id, b"left"),
-        )
-        .await
-        .unwrap();
+        let get_out =
+            async_api::mudu_get_bytes(&host::serialize_session_get_param(session_id, b"left"))
+                .await
+                .unwrap();
         assert_eq!(
             host::deserialize_get_result(&get_out).unwrap(),
             Some(b"right".to_vec())
         );
 
-        let range_out = async_api::mudu_range_bytes(
-            &host::serialize_session_range_param(session_id, b"l", b"z"),
-        )
+        let range_out = async_api::mudu_range_bytes(&host::serialize_session_range_param(
+            session_id, b"l", b"z",
+        ))
         .await
         .unwrap();
         assert_eq!(

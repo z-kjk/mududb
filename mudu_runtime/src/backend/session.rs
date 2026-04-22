@@ -26,7 +26,6 @@ use libsql::params::Params;
 use libsql::{Rows, Statement, Value};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::info;
 
 /// session would be accessed in local thread
 pub struct Session {
@@ -64,7 +63,6 @@ impl Debug for DummyAuthSource {
 #[async_trait]
 impl AuthSource for DummyAuthSource {
     async fn get_password(&self, info: &LoginInfo) -> PgWireResult<Password> {
-        info!("login info: {:?}", info);
         let salt = vec![0, 0, 0, 0];
         let password = "root";
         let user = info.user().as_ref().map_or_else(
@@ -206,7 +204,7 @@ impl ExtendedQueryHandler for Session {
             .prepare(query)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let params = get_params(portal);
+        let params = get_params(portal)?;
         if query.to_uppercase().starts_with("SELECT") {
             let header = Arc::new(row_desc_from_stmt(&stmt, &portal.result_column_format)?);
             let rows = stmt
@@ -229,7 +227,7 @@ unsafe impl Send for Session {}
 
 unsafe impl Sync for Session {}
 
-fn get_params(portal: &Portal<String>) -> Vec<Value> {
+fn get_params(portal: &Portal<String>) -> PgWireResult<Vec<Value>> {
     let mut results = Vec::with_capacity(portal.parameter_len());
     for i in 0..portal.parameter_len() {
         let param_type = portal
@@ -243,40 +241,93 @@ fn get_params(portal: &Portal<String>) -> Vec<Value> {
         // we only support a small amount of types for demo
         match &param_type {
             &Type::BOOL => {
-                let param = portal.parameter::<bool>(i, &param_type).unwrap();
-                results.push(Value::Integer(param.unwrap() as i64));
+                let param = portal.parameter::<bool>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL bool parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Integer(param as i64));
             }
             &Type::INT2 => {
-                let param = portal.parameter::<i16>(i, &param_type).unwrap();
-                results.push(Value::Integer(param.unwrap() as i64));
+                let param = portal.parameter::<i16>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL int2 parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Integer(param as i64));
             }
             &Type::INT4 => {
-                let param = portal.parameter::<i32>(i, &param_type).unwrap();
-                results.push(Value::Integer(param.unwrap() as i64));
+                let param = portal.parameter::<i32>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL int4 parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Integer(param as i64));
             }
             &Type::INT8 => {
-                let param = portal.parameter::<i64>(i, &param_type).unwrap();
-                results.push(Value::Integer(param.unwrap()));
+                let param = portal.parameter::<i64>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL int8 parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Integer(param));
             }
             &Type::TEXT | &Type::VARCHAR => {
-                let param = portal.parameter::<String>(i, &param_type).unwrap();
-                results.push(Value::Text(param.unwrap()));
+                let param = portal.parameter::<String>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL text parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Text(param));
             }
             &Type::FLOAT4 => {
-                let param = portal.parameter::<f32>(i, &param_type).unwrap();
-                results.push(Value::Real(param.unwrap() as f64));
+                let param = portal.parameter::<f32>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL float4 parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Real(param as f64));
             }
             &Type::FLOAT8 => {
-                let param = portal.parameter::<f64>(i, &param_type).unwrap();
-                results.push(Value::Real(param.unwrap()));
+                let param = portal.parameter::<f64>(i, &param_type)?;
+                let param = param.ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "22023".to_owned(),
+                        format!("NULL float8 parameter at index {}", i),
+                    )))
+                })?;
+                results.push(Value::Real(param));
             }
             _ => {
-                unimplemented!("parameter type not supported")
+                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                    "ERROR".to_owned(),
+                    "0A000".to_owned(),
+                    format!("Unsupported parameter type: {param_type}"),
+                ))));
             }
         }
     }
 
-    results
+    Ok(results)
 }
 
 fn row_desc_from_stmt(stmt: &Statement, format: &Format) -> PgWireResult<Vec<FieldInfo>> {

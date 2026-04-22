@@ -1,3 +1,4 @@
+pub mod format;
 pub mod page_block_ref;
 pub mod page_block_ref_mut;
 pub mod page_header;

@@ -44,10 +44,10 @@ unsafe impl Send for RelationInner {}
 unsafe impl Sync for RelationInner {}
 
 impl Relation {
-    pub fn new(table_id: OID, partition_id: OID, path: String, table_desc: &TableDesc) -> Self {
-        Self {
-            inner: RelationInner::new(table_id, partition_id, path, table_desc),
-        }
+    pub fn new(table_id: OID, partition_id: OID, path: String, table_desc: &TableDesc) -> RS<Self> {
+        Ok(Self {
+            inner: RelationInner::new(table_id, partition_id, path, table_desc)?,
+        })
     }
 
     pub async fn has_visible_version(&self, key: &KeyTuple, snapshot: &WorkerSnapshot) -> RS<bool> {
@@ -124,7 +124,7 @@ impl Relation {
 }
 
 impl RelationInner {
-    fn new(table_id: OID, partition_id: OID, path: String, table_desc: &TableDesc) -> Self {
+    fn new(table_id: OID, partition_id: OID, path: String, table_desc: &TableDesc) -> RS<Self> {
         let key_identity = TimeSeriesFileIdentity {
             partition_id,
             table_id,
@@ -135,6 +135,8 @@ impl RelationInner {
             table_id,
             file_index: VALUE_FILE_INDEX,
         };
+        let key_schema_hash = tuple_schema_hash(b'K', table_desc.key_desc());
+        let value_schema_hash = tuple_schema_hash(b'V', table_desc.value_desc());
 
         let relation = Self {
             _table_id: table_id,
@@ -145,19 +147,24 @@ impl RelationInner {
                 desc: table_desc.key_desc().clone(),
             })),
             key_file: UnsafeCell::new(
-                TimeSeriesFile::open_relation_file_sync(&path, key_identity, true)
-                    .unwrap_or_else(|e| panic!("open relation key file failed: {e}")),
+                TimeSeriesFile::open_relation_file_sync(&path, key_identity, key_schema_hash, true)
+                    .map_err(|e| m_error!(EC::IOErr, "open relation key file failed", e))?,
             ),
             value_file: UnsafeCell::new(
-                TimeSeriesFile::open_relation_file_sync(&path, value_identity, true)
-                    .unwrap_or_else(|e| panic!("open relation value file failed: {e}")),
+                TimeSeriesFile::open_relation_file_sync(
+                    &path,
+                    value_identity,
+                    value_schema_hash,
+                    true,
+                )
+                .map_err(|e| m_error!(EC::IOErr, "open relation value file failed", e))?,
             ),
             next_tuple_id: Cell::new(1),
         };
         relation
             .rebuild_from_files()
-            .unwrap_or_else(|e| panic!("rebuild relation from files failed: {e}"));
-        relation
+            .map_err(|e| m_error!(EC::StorageErr, "rebuild relation from files failed", e))?;
+        Ok(relation)
     }
 
     fn rebuild_from_files(&self) -> RS<()> {
@@ -384,6 +391,40 @@ impl RelationInner {
     }
 }
 
+fn tuple_schema_hash(
+    role: u8,
+    desc: &mudu_contract::tuple::tuple_binary_desc::TupleBinaryDesc,
+) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    fn write(mut h: u64, bytes: &[u8]) -> u64 {
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(PRIME);
+        }
+        h
+    }
+    let mut h = OFFSET;
+    h = write(h, b"mudu.tuple.schema_hash.v1");
+    h = write(h, &[role]);
+    let count = desc.field_count() as u32;
+    h = write(h, &count.to_le_bytes());
+    for fd in desc.field_desc() {
+        let slot = fd.slot();
+        let off = slot.offset() as u32;
+        let len = slot.length() as u32;
+        h = write(h, &off.to_le_bytes());
+        h = write(h, &len.to_le_bytes());
+        h = write(h, &[fd.is_fixed_len() as u8]);
+        let info = fd.type_obj().to_info();
+        h = write(h, &(info.id as u32).to_le_bytes());
+        let p = info.param.as_bytes();
+        h = write(h, &(p.len() as u32).to_le_bytes());
+        h = write(h, p);
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
@@ -440,7 +481,8 @@ mod tests {
         let partition_id = 7;
         let path = relation_path();
 
-        let relation = Relation::new(table_id, partition_id, path.clone(), table_desc.as_ref());
+        let relation =
+            Relation::new(table_id, partition_id, path.clone(), table_desc.as_ref()).unwrap();
         relation
             .write_value_sync(i32_bytes(1), i32_bytes(11), 1)
             .unwrap();
@@ -450,7 +492,8 @@ mod tests {
             .unwrap();
         drop(relation);
 
-        let reopened = Relation::new(table_id, partition_id, path.clone(), table_desc.as_ref());
+        let reopened =
+            Relation::new(table_id, partition_id, path.clone(), table_desc.as_ref()).unwrap();
         assert_eq!(
             reopened
                 .visible_value_sync(

@@ -1,3 +1,6 @@
+use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use std::collections::HashMap;
 
 #[derive(Copy, Clone)]
@@ -30,7 +33,7 @@ pub enum LogicalConnective {
     AND,
 }
 
-fn name2op(name: String) -> Operator {
+fn name2op(name: String) -> RS<Operator> {
     let array = [
         ("=", Operator::OValueCompare(ValueCompare::EQ)),
         ("<", Operator::OValueCompare(ValueCompare::LT)),
@@ -47,15 +50,18 @@ fn name2op(name: String) -> Operator {
     let map = HashMap::from(array);
     let opt_op = map.get(name.as_str());
     let op = if let Some(op) = opt_op {
-        op
+        *op
     } else {
-        panic!("Operator {} not found", name);
+        return Err(m_error!(
+            EC::ParseErr,
+            format!("operator {} not found", name)
+        ));
     };
-    op.clone()
+    Ok(op)
 }
 
 impl Operator {
-    pub fn from_str(name: String) -> Self {
+    pub fn from_str(name: String) -> RS<Self> {
         name2op(name)
     }
 
@@ -63,9 +69,7 @@ impl Operator {
         match self {
             Operator::OValueCompare(_) => None,
             Operator::OLogicalConnective(c) => Some(c.clone()),
-            &Operator::OArithmetic(_) => {
-                panic!("Arithmetic not supported");
-            }
+            &Operator::OArithmetic(_) => None,
         }
     }
 

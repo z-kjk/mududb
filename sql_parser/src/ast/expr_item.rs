@@ -59,7 +59,12 @@ mod tests {
             DatTyped::from_string("alice".to_string()),
         )));
         assert_eq!(
-            literal.to_literal().unwrap().dat_type().dat_type().dat_type_id(),
+            literal
+                .to_literal()
+                .unwrap()
+                .dat_type()
+                .dat_type()
+                .dat_type_id(),
             DatTypeID::String
         );
 

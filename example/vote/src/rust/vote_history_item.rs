@@ -577,14 +577,19 @@ pub mod object {
             assert_eq!(from_value.get_vote_ended(), &Some(1));
 
             let from_binary = VoteHistoryItem::from_binary(
-                item.to_binary(VoteHistoryItem::dat_type()).unwrap().as_ref(),
+                item.to_binary(VoteHistoryItem::dat_type())
+                    .unwrap()
+                    .as_ref(),
             )
             .unwrap();
             assert_eq!(from_binary.get_action_time(), &Some(11));
 
             let mut updated = VoteHistoryItem::new_empty();
             updated
-                .set_field_value("topic", mudu_type::dat_value::DatValue::from_string("t2".to_string()))
+                .set_field_value(
+                    "topic",
+                    mudu_type::dat_value::DatValue::from_string("t2".to_string()),
+                )
                 .unwrap();
             updated
                 .set_field_value("vote_ended", mudu_type::dat_value::DatValue::from_i32(0))

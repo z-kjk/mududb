@@ -2,14 +2,14 @@ use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
 use mudu_contract::protocol::{
-    ClientRequest, Frame, GetRequest, HEADER_LEN, KeyValue, MessageType, ProcedureInvokeRequest,
-    PutRequest, RangeScanRequest, ServerResponse, SessionCloseRequest, SessionCreateRequest,
-    decode_error_response, decode_get_response, decode_procedure_invoke_response,
-    decode_put_response, decode_range_scan_response, decode_server_response,
-    decode_session_close_response, decode_session_create_response, encode_batch_request,
-    encode_client_request, encode_client_request_with_message_type, encode_get_request,
-    encode_procedure_invoke_request, encode_put_request, encode_range_scan_request,
-    encode_session_close_request, encode_session_create_request,
+    ClientRequest, Frame, FrameHeader, GetRequest, HEADER_LEN, KeyValue, MessageType,
+    ProcedureInvokeRequest, PutRequest, RangeScanRequest, ServerResponse, SessionCloseRequest,
+    SessionCreateRequest, decode_error_response, decode_get_response,
+    decode_procedure_invoke_response, decode_put_response, decode_range_scan_response,
+    decode_server_response, decode_session_close_response, decode_session_create_response,
+    encode_batch_request, encode_client_request, encode_client_request_with_message_type,
+    encode_get_request, encode_procedure_invoke_request, encode_put_request,
+    encode_range_scan_request, encode_session_close_request, encode_session_create_request,
 };
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -171,8 +171,7 @@ impl SyncClient {
         self.stream
             .read_exact(&mut header)
             .map_err(|e| m_error!(EC::NetErr, "read response header error", e))?;
-        let payload_len =
-            u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+        let payload_len = FrameHeader::decode_header_bytes(&header)?.payload_len() as usize;
         let mut frame_bytes = Vec::with_capacity(HEADER_LEN + payload_len);
         frame_bytes.extend_from_slice(&header);
         if payload_len > 0 {
@@ -188,7 +187,13 @@ impl SyncClient {
     fn ensure_success_frame(&self, frame: &Frame) -> RS<()> {
         if frame.header().message_type() == MessageType::Error {
             let error = decode_error_response(frame)?;
-            return Err(m_error!(EC::NetErr, error.message()));
+            let ec = mudu::error::ec::EC::from_u32(error.code()).unwrap_or(EC::NetErr);
+            let msg = if error.name().is_empty() {
+                error.message().to_string()
+            } else {
+                format!("{}({}): {}", error.name(), error.code(), error.message())
+            };
+            return Err(m_error!(ec, msg));
         }
         Ok(())
     }
@@ -226,8 +231,9 @@ mod tests {
             let (mut socket, _) = listener.accept().unwrap();
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);
@@ -257,8 +263,9 @@ mod tests {
 
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);
@@ -270,8 +277,9 @@ mod tests {
 
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);
@@ -311,8 +319,9 @@ mod tests {
             let (mut socket, _) = listener.accept().unwrap();
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);
@@ -345,8 +354,9 @@ mod tests {
 
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);
@@ -361,8 +371,9 @@ mod tests {
 
             let mut header = [0u8; HEADER_LEN];
             socket.read_exact(&mut header).unwrap();
-            let payload_len =
-                u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+            let payload_len = FrameHeader::decode_header_bytes(&header)
+                .unwrap()
+                .payload_len() as usize;
             let mut body = vec![0u8; payload_len];
             socket.read_exact(&mut body).unwrap();
             let mut request = Vec::from(header);

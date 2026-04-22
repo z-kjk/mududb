@@ -32,7 +32,10 @@ pub fn wait_until_port_ready(port: u16, service_name: &str) -> RS<()> {
     }
     Err(mudu::m_error!(
         mudu::error::ec::EC::NetErr,
-        format!("{} server did not become ready on port {}", service_name, port)
+        format!(
+            "{} server did not become ready on port {}",
+            service_name, port
+        )
     ))
 }
 

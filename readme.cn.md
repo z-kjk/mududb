@@ -19,7 +19,7 @@ MuduDB 正在探索一组结合数据库执行、现代工具链和 AI 辅助开
 
 ## 架构
 
-<img src="doc/pic/architecture.svg" width="100%">
+<img src="doc/pic/cn/architecture.cn.svg" width="100%">
 
 上图展示了 MuduDB 的整体架构。
 

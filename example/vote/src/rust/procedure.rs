@@ -331,7 +331,11 @@ mod tests {
             "always".to_string(),
         )
         .unwrap_err();
-        assert!(vote_type_err.to_string().contains("Vote type must be 'single' or 'multiple'"));
+        assert!(
+            vote_type_err
+                .to_string()
+                .contains("Vote type must be 'single' or 'multiple'")
+        );
 
         let single_err = create_vote(
             1,
@@ -343,7 +347,11 @@ mod tests {
             "always".to_string(),
         )
         .unwrap_err();
-        assert!(single_err.to_string().contains("Single vote requires max_choices=1"));
+        assert!(
+            single_err
+                .to_string()
+                .contains("Single vote requires max_choices=1")
+        );
     }
 
     #[test]
@@ -359,6 +367,9 @@ mod tests {
             "hidden".to_string(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("Visibility rule must be 'always' or 'after_end'"));
+        assert!(
+            err.to_string()
+                .contains("Visibility rule must be 'always' or 'after_end'")
+        );
     }
 }

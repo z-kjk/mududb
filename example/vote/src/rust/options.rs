@@ -415,9 +415,24 @@ pub mod object {
             assert_eq!(from_textual.get_vote_id().as_deref(), Some("vote-1"));
 
             let mut updated = Options::new_empty();
-            updated.set_field_value("option_id", mudu_type::dat_value::DatValue::from_string("opt-2".to_string())).unwrap();
-            updated.set_field_value("vote_id", mudu_type::dat_value::DatValue::from_string("vote-2".to_string())).unwrap();
-            updated.set_field_value("option_text", mudu_type::dat_value::DatValue::from_string("Beta".to_string())).unwrap();
+            updated
+                .set_field_value(
+                    "option_id",
+                    mudu_type::dat_value::DatValue::from_string("opt-2".to_string()),
+                )
+                .unwrap();
+            updated
+                .set_field_value(
+                    "vote_id",
+                    mudu_type::dat_value::DatValue::from_string("vote-2".to_string()),
+                )
+                .unwrap();
+            updated
+                .set_field_value(
+                    "option_text",
+                    mudu_type::dat_value::DatValue::from_string("Beta".to_string()),
+                )
+                .unwrap();
             assert_eq!(updated.get_option_text().as_deref(), Some("Beta"));
         }
     }

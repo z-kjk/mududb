@@ -3,7 +3,6 @@ use crate::io::worker_ring::with_current_ring;
 #[cfg(target_os = "linux")]
 use crate::server::worker_task::WorkerTaskFuture;
 
-
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 pub fn spawn(conn_id: Option<u64>, future: WorkerTaskFuture) {

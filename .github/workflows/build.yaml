@@ -12,12 +12,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, windows-latest ]
+        os: [ ubuntu-latest ]
         include:
           - os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
-          - os: windows-latest
-            rust_target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout Code
@@ -30,12 +28,6 @@ jobs:
           sudo apt-get install -y python3 pip build-essential curl liburing-dev
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "PATH=$PATH:$HOME/.cargo/bin" >> $GITHUB_ENV
-
-      - name: Installing Prerequisites Rust (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\Users\$env:USERNAME\.cargo\bin", "User")
 
       - name: Install Rust Nightly
         run: |

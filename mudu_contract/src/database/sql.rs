@@ -16,6 +16,9 @@ use mudu::common::xid::XID;
 use mudu_type::datum::DatumDyn;
 use scc::HashMap;
 use std::sync::{Arc, Mutex};
+use tracing::debug;
+use mudu::error::ec::EC;
+use mudu::m_error;
 
 pub fn function_sql_stmt(stmt: &dyn SQLStmt) -> &dyn SQLStmt {
     stmt
@@ -36,16 +39,18 @@ pub enum DBConn {
 }
 
 impl DBConn {
-    pub async fn begin_tx(&self) -> RS<()> {
-        match self {
+    pub async fn begin_tx(&self) -> RS<XID> {
+        let xid = match self {
             DBConn::Sync(conn) => {
-                let _ = conn.begin_tx()?;
+                let xid = conn.begin_tx()?;
+                xid
             }
             DBConn::Async(conn) => {
-                let _ = conn.begin_tx().await?;
+                let xid = conn.begin_tx().await?;
+                xid
             }
-        }
-        Ok(())
+        };
+        Ok(xid)
     }
 
     pub async fn execute_silent(&self, sql: String) -> RS<()> {
@@ -75,7 +80,8 @@ pub struct Context {
 }
 
 struct ContextInner {
-    xid: XID,
+    session_id: OID,
+    xid:Mutex<XID>,
     result_set: Mutex<Option<ContextResult>>,
     conn: DBConn,
 }
@@ -120,15 +126,30 @@ impl ContextResult {
 impl ContextInner {
     fn new(oid: OID, conn: DBConn) -> RS<Self> {
         let s = Self {
-            xid: oid,
+            session_id: oid,
+            xid: Mutex::new(0),
             result_set: Mutex::new(Default::default()),
             conn,
         };
         Ok(s)
     }
 
-    fn xid(&self) -> XID {
-        self.xid
+    fn set_xid(&self, xid: XID) {
+        let mut g = self.xid.lock();
+        match &mut g {
+            Ok(v) => { **v = xid }
+            Err(_) => {  }
+        }
+    }
+    fn xid(&self) -> XID  {
+        let g = self.xid.lock();
+        match g {
+            Ok(v) => { *v }
+            Err(_) => { 0 }
+        }
+    }
+    fn session_id(&self) -> OID {
+        self.session_id
     }
     fn query<R: Entity>(&self, sql: &dyn SQLStmt, param: &dyn SQLParams) -> RS<RecordSet<R>> {
         let (rs, rd) = self.conn.expected_sync()?.query(sql, param)?;
@@ -171,7 +192,7 @@ impl ContextInner {
         let mut g = self.result_set.lock().unwrap();
         let context_result = ContextResult::new(result.0, result.1)?;
 
-        let result = QueryResult::new(self.xid, context_result.row_desc().clone());
+        let result = QueryResult::new(self.session_id, context_result.row_desc().clone());
         *g = Some(context_result);
         Ok(result)
     }
@@ -197,7 +218,10 @@ impl Context {
     }
 
     pub async fn begin_tx(&self) -> RS<()> {
-        self.inner.conn.begin_tx().await
+        let xid = self.inner.conn.begin_tx().await?;
+        self.inner.set_xid(xid);
+        debug!("transaction begin {}", xid);
+        Ok(())
     }
 
     pub fn context(oid: OID) -> Option<Context> {
@@ -207,6 +231,11 @@ impl Context {
 
     pub fn remove(xid: XID) -> Option<Context> {
         let opt = SessionContext.remove_sync(&xid);
+        opt.map(|e| e.1)
+    }
+
+    pub async fn remove_async(xid: XID) -> Option<Context> {
+        let opt = SessionContext.remove_async(&xid).await;
         opt.map(|e| e.1)
     }
 
@@ -226,23 +255,38 @@ impl Context {
         }
     }
 
-    pub async fn commit_async(xid: XID) -> RS<()> {
-        let opt = SessionContext.get_sync(&xid);
-        match opt {
-            Some(e) => e.get().commit_tx_async().await,
-            None => Ok(()),
-        }
+
+    pub async fn commit_async(oid: XID) -> RS<()> {
+        let ctx = Self::context_async(oid).await?;
+        ctx.commit_tx_async().await?;
+        debug!("transaction committed {}", ctx.inner.xid());
+        Ok(())
     }
 
-    pub async fn rollback_async(xid: XID) -> RS<()> {
-        let opt = SessionContext.get_sync(&xid);
-        match opt {
-            Some(e) => e.get().rollback_tx_async().await,
-            None => Ok(()),
-        }
+    pub async fn rollback_async(oid: XID) -> RS<()> {
+        let ctx = Self::context_async(oid).await?;
+        ctx.rollback_tx_async().await?;
+        debug!("transaction rollback {}", ctx.inner.xid());
+        Ok(())
+    }
+
+    pub async fn context_async(xid: XID) -> RS<Context> {
+        let ctx = {
+            let opt = SessionContext.get_async(&xid).await;
+            match opt {
+                Some(e) => {
+                    let ctx = e.get().clone();
+                    ctx
+                },
+                None => {
+                    return Err(m_error!(EC::NoSuchElement, "no such context"))
+                },
+            }
+        };
+        Ok(ctx)
     }
     pub fn session_id(&self) -> XID {
-        self.inner.xid()
+        self.inner.session_id()
     }
     fn rollback_tx(&self) -> RS<()> {
         self.inner.conn.expected_sync()?.rollback_tx()

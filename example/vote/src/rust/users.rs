@@ -320,10 +320,16 @@ pub mod object {
 
             let mut updated = Users::new_empty();
             updated
-                .set_field_value("user_id", mudu_type::dat_value::DatValue::from_string("u-2".to_string()))
+                .set_field_value(
+                    "user_id",
+                    mudu_type::dat_value::DatValue::from_string("u-2".to_string()),
+                )
                 .unwrap();
             updated
-                .set_field_value("phone", mudu_type::dat_value::DatValue::from_string("13900139000".to_string()))
+                .set_field_value(
+                    "phone",
+                    mudu_type::dat_value::DatValue::from_string("13900139000".to_string()),
+                )
                 .unwrap();
             assert_eq!(updated.get_user_id().as_deref(), Some("u-2"));
             assert_eq!(updated.get_phone().as_deref(), Some("13900139000"));

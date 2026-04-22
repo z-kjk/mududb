@@ -72,8 +72,8 @@ pub struct OutgoingMessage {
     delivery: DeliveryMode,
 }
 
-#[async_trait(?Send)]
-pub trait MessageBus {
+#[async_trait]
+pub trait MessageBus: Send + Sync {
     fn local_endpoint(&self) -> EndpointId;
 
     async fn send(&self, dst: EndpointId, message: OutgoingMessage) -> RS<MessageId>;
@@ -87,16 +87,8 @@ pub trait MessageBus {
 
 pub type MessageBusRef = Arc<dyn MessageBus>;
 
-#[derive(Clone, Copy)]
-struct MessageBusPtr(*const dyn MessageBus);
-
-// Safety: the registry stores raw Arc pointers behind a mutex, holds one strong reference for
-// each entry, and drops that reference on unregister.
-unsafe impl Send for MessageBusPtr {}
-unsafe impl Sync for MessageBusPtr {}
-
-fn message_bus_registry() -> &'static Mutex<HashMap<OID, MessageBusPtr>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<OID, MessageBusPtr>>> = OnceLock::new();
+fn message_bus_registry() -> &'static Mutex<HashMap<OID, MessageBusRef>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<OID, MessageBusRef>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -235,16 +227,10 @@ pub(crate) fn current_message_bus() -> RS<MessageBusRef> {
 }
 
 pub(crate) fn register_worker_message_bus(worker_id: OID, message_bus: &MessageBusRef) -> RS<()> {
-    let raw = Arc::into_raw(message_bus.clone());
     let mut registry = message_bus_registry()
         .lock()
         .map_err(|_| m_error!(EC::InternalErr, "message bus registry lock poisoned"))?;
-    if let Some(old) = registry.insert(worker_id, MessageBusPtr(raw)) {
-        // Safety: the registry owns one strong ref per registered pointer.
-        unsafe {
-            drop(Arc::from_raw(old.0));
-        }
-    }
+    registry.insert(worker_id, message_bus.clone());
     Ok(())
 }
 
@@ -252,32 +238,20 @@ pub(crate) fn unregister_worker_message_bus(worker_id: OID) -> RS<()> {
     let mut registry = message_bus_registry()
         .lock()
         .map_err(|_| m_error!(EC::InternalErr, "message bus registry lock poisoned"))?;
-    let Some(raw) = registry.remove(&worker_id) else {
+    let Some(_bus) = registry.remove(&worker_id) else {
         return Ok(());
     };
-    // Safety: the registry owns one strong ref per registered pointer.
-    unsafe {
-        drop(Arc::from_raw(raw.0));
-    }
     Ok(())
 }
 
 pub(crate) fn message_bus_for_worker(worker_id: OID) -> RS<MessageBusRef> {
-    let raw = {
-        let registry = message_bus_registry()
-            .lock()
-            .map_err(|_| m_error!(EC::InternalErr, "message bus registry lock poisoned"))?;
-        registry.get(&worker_id).copied().ok_or_else(|| {
-            m_error!(
-                EC::NoSuchElement,
-                format!("message bus for worker {} is not registered", worker_id)
-            )
-        })?
-    };
-    // Safety: the registry entry came from `Arc::into_raw`; we temporarily bump the strong count
-    // to materialize a cloned Arc for the caller.
-    unsafe {
-        Arc::increment_strong_count(raw.0);
-        Ok(Arc::from_raw(raw.0))
-    }
+    let registry = message_bus_registry()
+        .lock()
+        .map_err(|_| m_error!(EC::InternalErr, "message bus registry lock poisoned"))?;
+    registry.get(&worker_id).cloned().ok_or_else(|| {
+        m_error!(
+            EC::NoSuchElement,
+            format!("message bus for worker {} is not registered", worker_id)
+        )
+    })
 }

@@ -13,8 +13,8 @@ mod tests {
     use crate::universal::uni_procedure_result::UniProcedureResult;
     use crate::universal::uni_query_argv::UniQueryArgv;
     use crate::universal::uni_query_result::UniQueryResult;
-    use crate::universal::uni_record_type::{UniRecordField, UniRecordType};
     use crate::universal::uni_range_result::UniRangeResult;
+    use crate::universal::uni_record_type::{UniRecordField, UniRecordType};
     use crate::universal::uni_result::UniResult;
     use crate::universal::uni_result_set::UniResultSet;
     use crate::universal::uni_result_type::UniResultType;
@@ -86,9 +86,9 @@ mod tests {
                 UniRecordField {
                     field_name: "payload".to_string(),
                     field_type: UniDatType::Result(UniResultType {
-                        ok: Some(Box::new(UniDatType::Array(Box::new(UniDatType::Primitive(
-                            UniPrimitive::I32,
-                        ))))),
+                        ok: Some(Box::new(UniDatType::Array(Box::new(
+                            UniDatType::Primitive(UniPrimitive::I32),
+                        )))),
                         err: Some(Box::new(UniDatType::Identifier("ErrCode".to_string()))),
                     }),
                 },
@@ -122,16 +122,10 @@ mod tests {
                 row_set: vec![UniTupleRow {
                     fields: vec![
                         UniDatValue::Primitive(UniPrimitiveValue::from_u128(99)),
-                        UniDatValue::Primitive(UniPrimitiveValue::from_string(
-                            "alice".to_string(),
-                        )),
+                        UniDatValue::Primitive(UniPrimitiveValue::from_string("alice".to_string())),
                         UniDatValue::Array(vec![
-                            UniDatValue::Primitive(UniPrimitiveValue::from_string(
-                                "x".to_string(),
-                            )),
-                            UniDatValue::Primitive(UniPrimitiveValue::from_string(
-                                "y".to_string(),
-                            )),
+                            UniDatValue::Primitive(UniPrimitiveValue::from_string("x".to_string())),
+                            UniDatValue::Primitive(UniPrimitiveValue::from_string("y".to_string())),
                         ]),
                     ],
                 }],
@@ -150,10 +144,7 @@ mod tests {
         let record = uni_dat_ty2.as_record().expect("record dat type");
         assert_eq!(record.record_name, "envelope");
         assert_eq!(record.record_fields.len(), 3);
-        assert!(record.record_fields[2]
-            .field_type
-            .as_identifier()
-            .is_none());
+        assert!(record.record_fields[2].field_type.as_identifier().is_none());
     }
 
     #[test]

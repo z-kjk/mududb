@@ -51,12 +51,12 @@ pub fn partition_rule_catalog_desc() -> RS<Arc<TableDesc>> {
 
 pub fn open_partition_rule_catalog(path: &str) -> RS<Relation> {
     let desc = partition_rule_catalog_desc()?;
-    Ok(Relation::new(
+    Relation::new(
         PARTITION_RULE_CATALOG_TABLE_ID,
         PARTITION_RULE_CATALOG_PARTITION_ID,
         path.to_string(),
         desc.as_ref(),
-    ))
+    )
 }
 
 pub fn encode_partition_rule_catalog_key(oid: OID) -> RS<Vec<u8>> {
@@ -103,8 +103,7 @@ pub fn load_partition_rules_from_catalog(relation: &Relation) -> RS<Vec<Partitio
                 mudu::error::ec::EC::DecodeErr,
                 format!(
                     "partition rule catalog key oid {} does not match rule oid {}",
-                    key_oid,
-                    rule.oid
+                    key_oid, rule.oid
                 )
             ));
         }
