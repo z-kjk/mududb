@@ -93,11 +93,11 @@ fn {procedure_name}(
 结果类型别名 `RS` 定义如下：
 
 ```rust
-use mudu::error::error::ER;
-pub type RS<X> = Result<X, ER>;  // ER: Error
+use mudu::error::err::MError;
+pub type RS<X> = Result<X, MError>;
 ```
 
-在过程内部，运行时可以调用[系统调用](syscall.cn.md)，例如 SQL 系统调用（`mudu_query` / `mudu_command`）或键值系统调用（`mudu_get` / `mudu_put` / `mudu_range`）。
+在过程内部，运行时可以调用[系统调用](syscall.cn.md)，例如 SQL 系统调用（`mudu_query` / `mudu_command` / `mudu_batch`）或键值系统调用（`mudu_get` / `mudu_put` / `mudu_range`）。
 
 ## Mudu Procedure 中的 CRUD（Create/Read/Update/Delete）操作
 
@@ -169,6 +169,37 @@ pub async fn mudu_command_async(
 
 <!--quote_end-->
 
+### 3. `batch`
+
+`batch` 是 `command` 的 SQL 批量变体。它保持相同的 API 形态与返回结构，但用于通过
+`libsql::execute_batch` 执行原始批量 SQL 文本。
+
+<!--
+quote_begin
+content="[Batch API](../lang.common/mudu_batch.md#L-L)"
+-->
+```rust
+use sys_interface::sync_api::mudu_batch;
+use sys_interface::async_api::mudu_batch as mudu_batch_async;
+
+pub fn mudu_batch(
+    oid: OID,
+    sql: &dyn SQLStmt,
+    params: &dyn SQLParams,
+) -> RS<u64> {
+    /* ... */
+}
+
+pub async fn mudu_batch_async(
+    oid: OID,
+    sql: &dyn SQLStmt,
+    params: &dyn SQLParams,
+) -> RS<u64> {
+    /* ... */
+}
+```
+<!--quote_end-->
+
 ### 两者通用参数
 
 #### oid：
@@ -182,6 +213,7 @@ pub async fn mudu_command_async(
 #### params：
 
 参数列表。
+对于 `batch`，当前 libsql 实现要求参数列表为空。
 
 
 <!--
@@ -195,7 +227,7 @@ content="[KeyTrait](../lang.common/proc_key_traits.md#L-L)"
 
 <!--
 quote_begin
-content="[Entity](../../mudu/src/database/entity.rs#L12-L34)"
+content="[Entity](../../mudu_contract/src/database/entity.rs#L12-L34)"
 lang="rust"
 -->
 
@@ -230,7 +262,7 @@ pub trait Entity: private::Sealed + Datum {
 
 <!--
 quote_begin
-content="[SQLStmt](../../mudu/src/database/sql_stmt.rs#L3-L8)"
+content="[SQLStmt](../../mudu_contract/src/database/sql_stmt.rs#L3-L8)"
 lang="rust"
 -->
 
@@ -248,7 +280,7 @@ pub trait SQLStmt: fmt::Debug + fmt::Display + Sync + Send {
 
 <!--
 quote_begin
-content="[DatumDyn](../../mudu/src/data_type/datum.rs#L18-L38)"
+content="[DatumDyn](../../mudu_type/src/datum.rs#L17-L37)"
 lang="rust"
 -->
 

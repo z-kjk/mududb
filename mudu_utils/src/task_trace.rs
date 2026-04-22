@@ -4,6 +4,7 @@ use scc::HashSet;
 use crate::task_context::TaskContext;
 
 pub use crate::task::this_task_id;
+use crate::task::try_this_task_id;
 
 pub struct TaskTrace {
     watch: HashSet<String>,
@@ -33,7 +34,9 @@ impl TaskTrace {
     }
 
     fn enter(location: BtLoc) {
-        let _id = this_task_id();
+        let Some(_id) = try_this_task_id() else {
+            return;
+        };
         let opt = TaskContext::get(_id);
         if let Some(_t) = opt {
             _t.enter(location);
@@ -41,7 +44,9 @@ impl TaskTrace {
     }
 
     pub fn watch(&self, key: &str, value: &str) {
-        let _id = this_task_id();
+        let Some(_id) = try_this_task_id() else {
+            return;
+        };
         let opt = TaskContext::get(_id);
         if let Some(_t) = opt {
             _t.watch(key, value);
@@ -50,7 +55,9 @@ impl TaskTrace {
     }
 
     fn unwatch_all(&self) {
-        let _id = this_task_id();
+        let Some(_id) = try_this_task_id() else {
+            return;
+        };
         let opt = TaskContext::get(_id);
         if let Some(_t) = opt {
             self.watch.iter_sync(|key| {
@@ -62,7 +69,9 @@ impl TaskTrace {
     }
 
     fn exit() {
-        let _id = this_task_id();
+        let Some(_id) = try_this_task_id() else {
+            return;
+        };
         let opt = TaskContext::get(_id);
         if let Some(_t) = opt {
             _t.exit();
@@ -70,7 +79,9 @@ impl TaskTrace {
     }
 
     pub fn backtrace() -> String {
-        let _id = this_task_id();
+        let Some(_id) = try_this_task_id() else {
+            return "".to_string();
+        };
         let opt = TaskContext::get(_id);
         match opt {
             Some(_t) => _t.backtrace(),

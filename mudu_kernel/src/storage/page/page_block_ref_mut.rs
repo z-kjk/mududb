@@ -35,6 +35,16 @@ impl<'a> PageBlockRefMut<'a> {
     }
 
     pub fn init_empty(&mut self, page_id: PageId) -> RS<()> {
+        self.init_empty_with_tuple_meta(page_id, 0, 0, 0)
+    }
+
+    pub fn init_empty_with_tuple_meta(
+        &mut self,
+        page_id: PageId,
+        tuple_format_version: u32,
+        tuple_schema_hash: u64,
+        tuple_flags: u32,
+    ) -> RS<()> {
         self.check_page_len()?;
         self.page.fill(0);
 
@@ -44,6 +54,9 @@ impl<'a> PageBlockRefMut<'a> {
         header.set_last_record_offset(PAGE_HEADER_SIZE as u32);
         header.set_record_count(0);
         header.set_free_bytes((self.tailer_offset() - PAGE_HEADER_SIZE) as u32);
+        header.set_tuple_format_version(tuple_format_version);
+        header.set_tuple_schema_hash(tuple_schema_hash);
+        header.set_tuple_flags(tuple_flags);
         header.encode(&mut self.page[..PAGE_HEADER_SIZE])?;
 
         let tailer_offset = self.tailer_offset();

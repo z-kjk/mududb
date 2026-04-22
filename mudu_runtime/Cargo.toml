@@ -11,6 +11,7 @@ out-dir = "src/bindings"
 debug_trace = ["mudu_kernel/debug_trace", "mudu_utils/debug_trace"]
 
 [dependencies]
+async-backtrace = {workspace = true}
 mudu_type = { workspace = true }
 mudu_sys = { workspace = true }
 mudu_contract = { workspace = true }

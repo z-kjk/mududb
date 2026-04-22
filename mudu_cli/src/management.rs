@@ -1,10 +1,19 @@
 use base64::Engine;
 use mudu::common::id::OID;
 use mudu_binding::universal::uni_oid::UniOid;
+use mudu_contract::procedure::proc_desc::ProcDesc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::LazyLock;
 
 type AppResult<T> = Result<T, String>;
+
+static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("build HTTP client failed: {}", e))
+});
 
 fn serialize_oid_as_unioid<S>(oid: &OID, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -84,9 +93,30 @@ pub async fn fetch_server_topology(http_addr: &str) -> AppResult<ServerTopology>
     serde_json::from_value(data).map_err(|e| format!("decode server topology failed: {}", e))
 }
 
+pub async fn fetch_app_list(http_addr: &str) -> AppResult<Value> {
+    let response = get_http_json(http_addr, "/mudu/app/list").await?;
+    extract_http_api_data(response)
+}
+
+pub async fn fetch_app_detail(
+    http_addr: &str,
+    app: &str,
+    module: Option<&str>,
+    proc_name: Option<&str>,
+) -> AppResult<Value> {
+    let path = match (module, proc_name) {
+        (None, None) => format!("/mudu/app/list/{}", app),
+        (Some(module), Some(proc_name)) => {
+            format!("/mudu/app/list/{}/{}/{}", app, module, proc_name)
+        }
+        _ => return Err("--proc requires --module".to_string()),
+    };
+    let response = get_http_json(http_addr, &path).await?;
+    extract_http_api_data(response)
+}
+
 pub fn is_server_topology_unsupported(err: &str) -> bool {
-    err.contains("server topology is not supported")
-        || err.contains("\"code\":\"NotImplemented\"")
+    err.contains("server topology is not supported") || err.contains("\"code\":\"NotImplemented\"")
 }
 
 pub async fn install_app_package(http_addr: &str, mpk_binary: Vec<u8>) -> AppResult<()> {
@@ -96,6 +126,27 @@ pub async fn install_app_package(http_addr: &str, mpk_binary: Vec<u8>) -> AppRes
     let response = post_http_json(http_addr, "/mudu/app/install", payload).await?;
     let _ = extract_http_api_data(response)?;
     Ok(())
+}
+
+pub async fn uninstall_app(http_addr: &str, app_name: &str) -> AppResult<()> {
+    let response =
+        delete_http_json(http_addr, &format!("/mudu/app/uninstall/{}", app_name)).await?;
+    let _ = extract_http_api_data(response)?;
+    Ok(())
+}
+
+pub async fn fetch_proc_desc(
+    http_addr: &str,
+    app: &str,
+    module: &str,
+    proc_name: &str,
+) -> AppResult<ProcDesc> {
+    let data = fetch_app_detail(http_addr, app, Some(module), Some(proc_name)).await?;
+    let proc_desc = data
+        .get("proc_desc")
+        .cloned()
+        .ok_or_else(|| "procedure detail response missing proc_desc".to_string())?;
+    serde_json::from_value(proc_desc).map_err(|e| format!("decode proc_desc failed: {}", e))
 }
 
 pub async fn route_partition(
@@ -118,10 +169,7 @@ pub async fn route_partition(
 
 async fn get_http_json(http_addr: &str, path: &str) -> AppResult<Value> {
     let url = format!("http://{}{}", http_addr, path);
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("build HTTP client failed: {}", e))?;
+    let client = http_client()?;
     let response = client
         .get(&url)
         .send()
@@ -135,10 +183,7 @@ async fn get_http_json(http_addr: &str, path: &str) -> AppResult<Value> {
 
 async fn post_http_json(http_addr: &str, path: &str, payload: Value) -> AppResult<Value> {
     let url = format!("http://{}{}", http_addr, path);
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("build HTTP client failed: {}", e))?;
+    let client = http_client()?;
     let response = client
         .post(&url)
         .json(&payload)
@@ -151,7 +196,41 @@ async fn post_http_json(http_addr: &str, path: &str, payload: Value) -> AppResul
         .map_err(|e| format!("decode HTTP response from {} failed: {}", url, e))
 }
 
+async fn delete_http_json(http_addr: &str, path: &str) -> AppResult<Value> {
+    let url = format!("http://{}{}", http_addr, path);
+    let client = http_client()?;
+    let response = client
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("DELETE {} failed: {}", url, e))?;
+    response
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("decode HTTP response from {} failed: {}", url, e))
+}
+
+fn http_client() -> AppResult<&'static reqwest::Client> {
+    match &*HTTP_CLIENT {
+        Ok(client) => Ok(client),
+        Err(err) => Err(err.clone()),
+    }
+}
+
 fn extract_http_api_data(response: Value) -> AppResult<Value> {
+    if let Some(ok) = response.get("ok").and_then(Value::as_bool) {
+        if ok {
+            return Ok(response.get("data").cloned().unwrap_or(Value::Null));
+        }
+        let error = response.get("error").cloned().unwrap_or(Value::Null);
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| response.get("message").and_then(Value::as_str))
+            .unwrap_or("HTTP API request failed");
+        return Err(format!("{}: {}", message, error));
+    }
+
     let status = response
         .get("status")
         .and_then(Value::as_i64)
@@ -175,6 +254,7 @@ mod tests {
     #[test]
     fn extract_http_api_data_returns_data_on_success() {
         let value = extract_http_api_data(json!({
+            "ok": true,
             "status": 0,
             "message": "ok",
             "data": {"worker_count": 2}
@@ -186,13 +266,14 @@ mod tests {
     #[test]
     fn extract_http_api_data_returns_message_on_failure() {
         let err = extract_http_api_data(json!({
+            "ok": false,
             "status": 1001,
             "message": "fail",
-            "data": {"reason": "bad request"}
+            "error": {"code": 10010, "name": "ParseErr", "message": "bad request"}
         }))
         .unwrap_err();
-        assert!(err.contains("fail"));
         assert!(err.contains("bad request"));
+        assert!(err.contains("ParseErr"));
     }
 
     #[test]

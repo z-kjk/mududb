@@ -11,11 +11,13 @@ use scc::HashMap as SccHashMap;
 
 use crate::contract::data_row::DataRow;
 use crate::contract::meta_mgr::MetaMgr;
+use crate::contract::partition_rule_binding::TablePartitionBinding;
 use crate::contract::schema_table::SchemaTable;
 use crate::contract::table_desc::TableDesc;
 use crate::contract::timestamp::Timestamp;
 use crate::contract::version_tuple::VersionTuple;
 use crate::index::index_key::key_tuple::KeyTuple;
+use crate::server::partition_router::DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID;
 use crate::server::worker_snapshot::{KvItem, WorkerSnapshot};
 use crate::server::worker_tx_manager::WorkerTxManager;
 use crate::storage::relation::relation::Relation;
@@ -79,7 +81,7 @@ impl WorkerStorage {
 
     pub fn bootstrap_existing_tables_sync(&self) -> RS<()> {
         for schema in block_on(self.mgr.list_schemas())? {
-            self.apply_create_table_local(&schema)?;
+            self.bootstrap_table_local(&schema)?;
         }
         Ok(())
     }
@@ -432,18 +434,15 @@ impl WorkerStorage {
         relation_rows: &BTreeMap<PhysicalRelationId, BTreeMap<Vec<u8>, Option<Vec<u8>>>>,
     ) -> RS<()> {
         for (relation_id, rows) in relation_rows {
-            let relation = self
-                .relation_store
-                .get_sync(relation_id)
-                .ok_or_else(|| {
-                    m_error!(
-                        EC::NoSuchElement,
-                        format!(
-                            "no such table {} partition {}",
-                            relation_id.table_id, relation_id.partition_id
-                        )
+            let relation = self.relation_store.get_sync(relation_id).ok_or_else(|| {
+                m_error!(
+                    EC::NoSuchElement,
+                    format!(
+                        "no such table {} partition {}",
+                        relation_id.table_id, relation_id.partition_id
                     )
-                })?;
+                )
+            })?;
             for key in rows.keys() {
                 let key_tuple = KeyTuple::from(key.clone());
                 if relation
@@ -470,18 +469,15 @@ impl WorkerStorage {
         relation_rows: &BTreeMap<PhysicalRelationId, BTreeMap<Vec<u8>, Option<Vec<u8>>>>,
     ) -> RS<()> {
         for (relation_id, rows) in relation_rows {
-            let relation = self
-                .relation_store
-                .get_sync(relation_id)
-                .ok_or_else(|| {
-                    m_error!(
-                        EC::NoSuchElement,
-                        format!(
-                            "no such table {} partition {}",
-                            relation_id.table_id, relation_id.partition_id
-                        )
+            let relation = self.relation_store.get_sync(relation_id).ok_or_else(|| {
+                m_error!(
+                    EC::NoSuchElement,
+                    format!(
+                        "no such table {} partition {}",
+                        relation_id.table_id, relation_id.partition_id
                     )
-                })?;
+                )
+            })?;
             for key in rows.keys() {
                 let key_tuple = KeyTuple::from(key.clone());
                 if relation
@@ -531,18 +527,15 @@ impl WorkerStorage {
 
     fn apply_relation_rows(&self, prepared: &PreparedWorkerCommit) -> RS<()> {
         for (relation_id, rows) in &prepared.relation_rows {
-            let relation = self
-                .relation_store
-                .get_sync(relation_id)
-                .ok_or_else(|| {
-                    m_error!(
-                        EC::NoSuchElement,
-                        format!(
-                            "no such table {} partition {}",
-                            relation_id.table_id, relation_id.partition_id
-                        )
+            let relation = self.relation_store.get_sync(relation_id).ok_or_else(|| {
+                m_error!(
+                    EC::NoSuchElement,
+                    format!(
+                        "no such table {} partition {}",
+                        relation_id.table_id, relation_id.partition_id
                     )
-                })?;
+                )
+            })?;
             for (key, value) in rows {
                 relation
                     .get()
@@ -554,18 +547,15 @@ impl WorkerStorage {
 
     async fn apply_relation_rows_async(&self, prepared: &PreparedWorkerCommit) -> RS<()> {
         for (relation_id, rows) in &prepared.relation_rows {
-            let relation = self
-                .relation_store
-                .get_sync(relation_id)
-                .ok_or_else(|| {
-                    m_error!(
-                        EC::NoSuchElement,
-                        format!(
-                            "no such table {} partition {}",
-                            relation_id.table_id, relation_id.partition_id
-                        )
+            let relation = self.relation_store.get_sync(relation_id).ok_or_else(|| {
+                m_error!(
+                    EC::NoSuchElement,
+                    format!(
+                        "no such table {} partition {}",
+                        relation_id.table_id, relation_id.partition_id
                     )
-                })?;
+                )
+            })?;
             for (key, value) in rows {
                 relation
                     .get()
@@ -701,8 +691,12 @@ impl WorkerStorage {
         Ok(())
     }
 
-    fn create_relation_index(&self, oid: OID, table_desc: &TableDesc) -> RS<()> {
-        self.create_relation_index_for_partition(oid, self.default_partition_id, table_desc)
+    fn create_unpartitioned_relation_index(&self, oid: OID, table_desc: &TableDesc) -> RS<()> {
+        self.create_relation_index_for_partition(
+            oid,
+            DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID,
+            table_desc,
+        )
     }
 
     fn create_relation_index_for_partition(
@@ -713,12 +707,7 @@ impl WorkerStorage {
     ) -> RS<()> {
         let _ = self.relation_store.insert_sync(
             self.relation_id(oid, partition_id),
-            Relation::new(
-                oid,
-                partition_id,
-                self.relation_path.clone(),
-                table_desc,
-            ),
+            Relation::new(oid, partition_id, self.relation_path.clone(), table_desc)?,
         );
         Ok(())
     }
@@ -738,7 +727,32 @@ impl WorkerStorage {
     fn apply_create_table_local(&self, schema: &SchemaTable) -> RS<()> {
         let table_desc =
             crate::contract::table_info::TableInfo::new(schema.clone())?.table_desc()?;
-        self.create_relation_index(schema.id(), table_desc.as_ref())
+        self.create_unpartitioned_relation_index(schema.id(), table_desc.as_ref())
+    }
+
+    fn bootstrap_table_local(&self, schema: &SchemaTable) -> RS<()> {
+        let table_desc =
+            crate::contract::table_info::TableInfo::new(schema.clone())?.table_desc()?;
+        let binding = block_on(self.mgr.get_table_partition_binding(schema.id()))?;
+        match binding {
+            Some(binding) => {
+                self.create_partitioned_relations(schema.id(), &binding, table_desc.as_ref())
+            }
+            None => self.create_unpartitioned_relation_index(schema.id(), table_desc.as_ref()),
+        }
+    }
+
+    fn create_partitioned_relations(
+        &self,
+        oid: OID,
+        binding: &TablePartitionBinding,
+        table_desc: &TableDesc,
+    ) -> RS<()> {
+        let rule = block_on(self.mgr.get_partition_rule_by_id(binding.rule_id))?;
+        for partition in &rule.partitions {
+            self.create_relation_index_for_partition(oid, partition.partition_id, table_desc)?;
+        }
+        Ok(())
     }
 
     fn apply_drop_table_local(&self, oid: OID) {
@@ -866,12 +880,14 @@ mod tests {
     use super::*;
 
     struct TestMetaMgr {
+        schemas: Mutex<HashMap<OID, SchemaTable>>,
         tables: Mutex<HashMap<OID, Arc<TableDesc>>>,
     }
 
     impl TestMetaMgr {
         fn new() -> Self {
             Self {
+                schemas: Mutex::new(HashMap::new()),
                 tables: Mutex::new(HashMap::new()),
             }
         }
@@ -900,13 +916,22 @@ mod tests {
 
         async fn create_table(&self, schema: &SchemaTable) -> RS<()> {
             let table = TableInfo::new(schema.clone())?.table_desc()?;
+            self.schemas
+                .lock()
+                .unwrap()
+                .insert(schema.id(), schema.clone());
             self.tables.lock().unwrap().insert(schema.id(), table);
             Ok(())
         }
 
         async fn drop_table(&self, table_id: OID) -> RS<()> {
+            self.schemas.lock().unwrap().remove(&table_id);
             self.tables.lock().unwrap().remove(&table_id);
             Ok(())
+        }
+
+        async fn list_schemas(&self) -> RS<Vec<SchemaTable>> {
+            Ok(self.schemas.lock().unwrap().values().cloned().collect())
         }
     }
 
@@ -1113,7 +1138,7 @@ mod tests {
             3,
             b"a".to_vec(),
             Some(b"1".to_vec()),
-            XLBatch { entries: vec![] },
+            XLBatch::new(vec![]),
         );
         storage.apply_prepared_commit(prepared).unwrap();
 
@@ -1159,7 +1184,7 @@ mod tests {
                 &snapshot1,
                 snapshot1.xid(),
                 BTreeMap::from([(b"a".to_vec(), Some(b"1".to_vec()))]),
-                XLBatch { entries: vec![] },
+                XLBatch::new(vec![]),
             )
             .unwrap();
         let prepared2 = storage
@@ -1167,7 +1192,7 @@ mod tests {
                 &snapshot2,
                 snapshot2.xid(),
                 BTreeMap::from([(b"b".to_vec(), Some(b"2".to_vec()))]),
-                XLBatch { entries: vec![] },
+                XLBatch::new(vec![]),
             )
             .unwrap();
 
@@ -1187,29 +1212,27 @@ mod tests {
     #[test]
     fn worker_storage_replay_batch_restores_kv_and_relation_rows() {
         let (storage, oid) = test_storage();
-        let batch = XLBatch {
-            entries: vec![crate::wal::xl_entry::XLEntry {
-                xid: 9,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Insert(XLInsert {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"k".to_vec(),
-                        value: b"v".to_vec(),
-                    }),
-                    TxOp::Insert(XLInsert {
-                        table_id: oid,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: i32_bytes(7),
-                        value: i32_bytes(70),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        };
+        let batch = XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+            xid: 9,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                }),
+                TxOp::Insert(XLInsert {
+                    table_id: oid,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: i32_bytes(7),
+                    value: i32_bytes(70),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
 
         storage.replay_batch(batch).unwrap();
 
@@ -1231,24 +1254,66 @@ mod tests {
             .worker_put_local(b"k".to_vec(), b"v".to_vec(), 1)
             .unwrap();
 
-        let batch = XLBatch {
-            entries: vec![crate::wal::xl_entry::XLEntry {
-                xid: 2,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Delete(XLDelete {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"k".to_vec(),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        };
+        let batch = XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+            xid: 2,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Delete(XLDelete {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"k".to_vec(),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
 
         storage.replay_batch(batch).unwrap();
 
         assert_eq!(block_on(storage.kv_get(b"k", None)).unwrap(), None);
+    }
+
+    #[test]
+    fn worker_storage_bootstrap_uses_partition_zero_for_unpartitioned_tables() {
+        let mgr = Arc::new(TestMetaMgr::new());
+        let schema = test_schema();
+        let oid = schema.id();
+        futures::executor::block_on(mgr.create_table(&schema)).unwrap();
+
+        let storage = WorkerStorage::new(
+            mgr,
+            123,
+            std::env::temp_dir()
+                .join(format!(
+                    "worker_storage_bootstrap_test_{}",
+                    mudu::common::id::gen_oid()
+                ))
+                .to_string_lossy()
+                .to_string(),
+        );
+        storage.bootstrap_existing_tables_sync().unwrap();
+
+        let batch = XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+            xid: 11,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: oid,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: i32_bytes(5),
+                    value: i32_bytes(50),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
+
+        storage.replay_batch(batch).unwrap();
+
+        let mut tx = begin_tx(12, vec![]);
+        assert_eq!(
+            block_on(storage.get_on_partition(oid, Some(0), &i32_bytes(5), &mut tx)).unwrap(),
+            Some(i32_bytes(50))
+        );
     }
 }

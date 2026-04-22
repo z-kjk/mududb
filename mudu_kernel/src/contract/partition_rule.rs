@@ -32,11 +32,7 @@ pub struct PartitionRuleDesc {
 }
 
 impl RangePartitionDef {
-    pub fn new(
-        name: String,
-        start: PartitionBound,
-        end: PartitionBound,
-    ) -> Self {
+    pub fn new(name: String, start: PartitionBound, end: PartitionBound) -> Self {
         Self {
             partition_id: gen_oid(),
             name,

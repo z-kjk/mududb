@@ -8,7 +8,7 @@ use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
 use std::future::Future;
 use std::slice;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 fn _invoke_proc(
     param: Vec<u8>,
@@ -104,7 +104,7 @@ fn _invoke_wrapper(
         param
     };
     let result = f(&param);
-    info!("invoke function, return {:?}", &result);
+    debug!("invoke function, return {:?}", &result);
     let out_buf = unsafe {
         let slice = slice::from_raw_parts_mut(p2_ptr, p2_len);
         slice

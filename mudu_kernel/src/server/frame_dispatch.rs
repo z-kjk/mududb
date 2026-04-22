@@ -8,13 +8,14 @@ use crate::server::worker::IoUringWorker;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use mudu_contract::protocol::{Frame, MessageType, HEADER_LEN};
+use mudu_contract::protocol::{Frame, FrameHeader, MessageType, HEADER_LEN};
 
 pub fn try_decode_next_frame(buf: &[u8]) -> RS<Option<(Frame, usize)>> {
     if buf.len() < HEADER_LEN {
         return Ok(None);
     }
-    let payload_len = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]) as usize;
+    let header = FrameHeader::decode_header_bytes(&buf[..HEADER_LEN])?;
+    let payload_len = header.payload_len() as usize;
     let frame_len = HEADER_LEN + payload_len;
     if buf.len() < frame_len {
         return Ok(None);

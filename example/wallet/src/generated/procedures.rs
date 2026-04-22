@@ -407,6 +407,518 @@ pub async fn purchase(xid: XID, user_id: i32, amount: i32, description: String) 
 
     Ok(())
 }
+async fn mp2_update_user(param:Vec<u8>) -> Vec<u8> {
+    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
+        param,
+        mudu_inner_p2_update_user,
+    ).await
+}
+
+pub async fn mudu_inner_p2_update_user(
+    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
+) -> ::mudu::common::result::RS<
+    ::mudu_contract::procedure::procedure_result::ProcedureResult,
+> {
+    let return_desc = mudu_result_desc_update_user().clone();
+    let res = update_user(
+        param.session_id(),
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[0], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                String,
+                _,
+            >(&param.param_list()[1], "String")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                String,
+                _,
+            >(&param.param_list()[2], "String")?,
+            
+        
+    ).await;
+    match res {
+        Ok(tuple) => {
+            let return_list = {
+                
+                vec![]
+                
+            };
+            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn mudu_argv_desc_update_user()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    ARGV_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "user_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "name".to_string(),
+                    
+                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "email".to_string(),
+                    
+                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_result_desc_update_user() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    RESULT_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_proc_desc_update_user()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+    static _PROC_DESC: std::sync::OnceLock<
+        ::mudu_contract::procedure::proc_desc::ProcDesc,
+    > = std::sync::OnceLock::new();
+    _PROC_DESC
+        .get_or_init(|| {
+            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
+                "wallet".to_string(),
+                "update_user".to_string(),
+                mudu_argv_desc_update_user().clone(),
+                mudu_result_desc_update_user().clone(),
+                false
+            )
+        })
+}
+
+mod mod_update_user {
+    wit_bindgen::generate!({
+        inline:
+        r##"package mudu:mp2-update-user;
+            world mudu-app-mp2-update-user {
+                export mp2-update-user: func(param:list<u8>) -> list<u8>;
+            }
+        "##,
+        async: true
+    });
+
+    #[allow(non_camel_case_types)]
+    #[allow(unused)]
+    struct GuestUpdateUser {}
+
+    impl Guest for GuestUpdateUser {
+        async fn mp2_update_user(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_update_user(param).await
+        }
+    }
+
+    export!(GuestUpdateUser);
+}
+async fn mp2_delete_user(param:Vec<u8>) -> Vec<u8> {
+    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
+        param,
+        mudu_inner_p2_delete_user,
+    ).await
+}
+
+pub async fn mudu_inner_p2_delete_user(
+    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
+) -> ::mudu::common::result::RS<
+    ::mudu_contract::procedure::procedure_result::ProcedureResult,
+> {
+    let return_desc = mudu_result_desc_delete_user().clone();
+    let res = delete_user(
+        param.session_id(),
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[0], "i32")?,
+            
+        
+    ).await;
+    match res {
+        Ok(tuple) => {
+            let return_list = {
+                
+                vec![]
+                
+            };
+            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn mudu_argv_desc_delete_user()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    ARGV_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "user_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_result_desc_delete_user() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    RESULT_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_proc_desc_delete_user()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+    static _PROC_DESC: std::sync::OnceLock<
+        ::mudu_contract::procedure::proc_desc::ProcDesc,
+    > = std::sync::OnceLock::new();
+    _PROC_DESC
+        .get_or_init(|| {
+            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
+                "wallet".to_string(),
+                "delete_user".to_string(),
+                mudu_argv_desc_delete_user().clone(),
+                mudu_result_desc_delete_user().clone(),
+                false
+            )
+        })
+}
+
+mod mod_delete_user {
+    wit_bindgen::generate!({
+        inline:
+        r##"package mudu:mp2-delete-user;
+            world mudu-app-mp2-delete-user {
+                export mp2-delete-user: func(param:list<u8>) -> list<u8>;
+            }
+        "##,
+        async: true
+    });
+
+    #[allow(non_camel_case_types)]
+    #[allow(unused)]
+    struct GuestDeleteUser {}
+
+    impl Guest for GuestDeleteUser {
+        async fn mp2_delete_user(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_delete_user(param).await
+        }
+    }
+
+    export!(GuestDeleteUser);
+}
+async fn mp2_transfer(param:Vec<u8>) -> Vec<u8> {
+    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
+        param,
+        mudu_inner_p2_transfer,
+    ).await
+}
+
+pub async fn mudu_inner_p2_transfer(
+    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
+) -> ::mudu::common::result::RS<
+    ::mudu_contract::procedure::procedure_result::ProcedureResult,
+> {
+    let return_desc = mudu_result_desc_transfer().clone();
+    let res = transfer(
+        param.session_id(),
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[0], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[1], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[2], "i32")?,
+            
+        
+    ).await;
+    match res {
+        Ok(tuple) => {
+            let return_list = {
+                
+                vec![]
+                
+            };
+            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn mudu_argv_desc_transfer()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    ARGV_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "from_user_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "to_user_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "amount".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_result_desc_transfer() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    RESULT_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_proc_desc_transfer()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+    static _PROC_DESC: std::sync::OnceLock<
+        ::mudu_contract::procedure::proc_desc::ProcDesc,
+    > = std::sync::OnceLock::new();
+    _PROC_DESC
+        .get_or_init(|| {
+            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
+                "wallet".to_string(),
+                "transfer".to_string(),
+                mudu_argv_desc_transfer().clone(),
+                mudu_result_desc_transfer().clone(),
+                false
+            )
+        })
+}
+
+mod mod_transfer {
+    wit_bindgen::generate!({
+        inline:
+        r##"package mudu:mp2-transfer;
+            world mudu-app-mp2-transfer {
+                export mp2-transfer: func(param:list<u8>) -> list<u8>;
+            }
+        "##,
+        async: true
+    });
+
+    #[allow(non_camel_case_types)]
+    #[allow(unused)]
+    struct GuestTransfer {}
+
+    impl Guest for GuestTransfer {
+        async fn mp2_transfer(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_transfer(param).await
+        }
+    }
+
+    export!(GuestTransfer);
+}
+async fn mp2_purchase(param:Vec<u8>) -> Vec<u8> {
+    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
+        param,
+        mudu_inner_p2_purchase,
+    ).await
+}
+
+pub async fn mudu_inner_p2_purchase(
+    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
+) -> ::mudu::common::result::RS<
+    ::mudu_contract::procedure::procedure_result::ProcedureResult,
+> {
+    let return_desc = mudu_result_desc_purchase().clone();
+    let res = purchase(
+        param.session_id(),
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[0], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[1], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                String,
+                _,
+            >(&param.param_list()[2], "String")?,
+            
+        
+    ).await;
+    match res {
+        Ok(tuple) => {
+            let return_list = {
+                
+                vec![]
+                
+            };
+            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn mudu_argv_desc_purchase()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    ARGV_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "user_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "amount".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "description".to_string(),
+                    
+                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_result_desc_purchase() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    RESULT_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_proc_desc_purchase()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+    static _PROC_DESC: std::sync::OnceLock<
+        ::mudu_contract::procedure::proc_desc::ProcDesc,
+    > = std::sync::OnceLock::new();
+    _PROC_DESC
+        .get_or_init(|| {
+            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
+                "wallet".to_string(),
+                "purchase".to_string(),
+                mudu_argv_desc_purchase().clone(),
+                mudu_result_desc_purchase().clone(),
+                false
+            )
+        })
+}
+
+mod mod_purchase {
+    wit_bindgen::generate!({
+        inline:
+        r##"package mudu:mp2-purchase;
+            world mudu-app-mp2-purchase {
+                export mp2-purchase: func(param:list<u8>) -> list<u8>;
+            }
+        "##,
+        async: true
+    });
+
+    #[allow(non_camel_case_types)]
+    #[allow(unused)]
+    struct GuestPurchase {}
+
+    impl Guest for GuestPurchase {
+        async fn mp2_purchase(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_purchase(param).await
+        }
+    }
+
+    export!(GuestPurchase);
+}
 async fn mp2_deposit(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
         param,
@@ -663,369 +1175,6 @@ mod mod_transfer_funds {
 
     export!(GuestTransferFunds);
 }
-async fn mp2_delete_user(param:Vec<u8>) -> Vec<u8> {
-    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
-        param,
-        mudu_inner_p2_delete_user,
-    ).await
-}
-
-pub async fn mudu_inner_p2_delete_user(
-    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
-) -> ::mudu::common::result::RS<
-    ::mudu_contract::procedure::procedure_result::ProcedureResult,
-> {
-    let return_desc = mudu_result_desc_delete_user().clone();
-    let res = delete_user(
-        param.session_id(),
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[0], "i32")?,
-            
-        
-    ).await;
-    match res {
-        Ok(tuple) => {
-            let return_list = {
-                
-                vec![]
-                
-            };
-            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn mudu_argv_desc_delete_user()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    ARGV_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "user_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_result_desc_delete_user() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    RESULT_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_proc_desc_delete_user()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
-    static _PROC_DESC: std::sync::OnceLock<
-        ::mudu_contract::procedure::proc_desc::ProcDesc,
-    > = std::sync::OnceLock::new();
-    _PROC_DESC
-        .get_or_init(|| {
-            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
-                "wallet".to_string(),
-                "delete_user".to_string(),
-                mudu_argv_desc_delete_user().clone(),
-                mudu_result_desc_delete_user().clone(),
-                false
-            )
-        })
-}
-
-mod mod_delete_user {
-    wit_bindgen::generate!({
-        inline:
-        r##"package mudu:mp2-delete-user;
-            world mudu-app-mp2-delete-user {
-                export mp2-delete-user: func(param:list<u8>) -> list<u8>;
-            }
-        "##,
-        async: true
-    });
-
-    #[allow(non_camel_case_types)]
-    #[allow(unused)]
-    struct GuestDeleteUser {}
-
-    impl Guest for GuestDeleteUser {
-        async fn mp2_delete_user(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_delete_user(param).await
-        }
-    }
-
-    export!(GuestDeleteUser);
-}
-async fn mp2_withdraw(param:Vec<u8>) -> Vec<u8> {
-    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
-        param,
-        mudu_inner_p2_withdraw,
-    ).await
-}
-
-pub async fn mudu_inner_p2_withdraw(
-    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
-) -> ::mudu::common::result::RS<
-    ::mudu_contract::procedure::procedure_result::ProcedureResult,
-> {
-    let return_desc = mudu_result_desc_withdraw().clone();
-    let res = withdraw(
-        param.session_id(),
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[0], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[1], "i32")?,
-            
-        
-    ).await;
-    match res {
-        Ok(tuple) => {
-            let return_list = {
-                
-                vec![]
-                
-            };
-            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn mudu_argv_desc_withdraw()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    ARGV_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "user_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "amount".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_result_desc_withdraw() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    RESULT_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_proc_desc_withdraw()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
-    static _PROC_DESC: std::sync::OnceLock<
-        ::mudu_contract::procedure::proc_desc::ProcDesc,
-    > = std::sync::OnceLock::new();
-    _PROC_DESC
-        .get_or_init(|| {
-            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
-                "wallet".to_string(),
-                "withdraw".to_string(),
-                mudu_argv_desc_withdraw().clone(),
-                mudu_result_desc_withdraw().clone(),
-                false
-            )
-        })
-}
-
-mod mod_withdraw {
-    wit_bindgen::generate!({
-        inline:
-        r##"package mudu:mp2-withdraw;
-            world mudu-app-mp2-withdraw {
-                export mp2-withdraw: func(param:list<u8>) -> list<u8>;
-            }
-        "##,
-        async: true
-    });
-
-    #[allow(non_camel_case_types)]
-    #[allow(unused)]
-    struct GuestWithdraw {}
-
-    impl Guest for GuestWithdraw {
-        async fn mp2_withdraw(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_withdraw(param).await
-        }
-    }
-
-    export!(GuestWithdraw);
-}
-async fn mp2_purchase(param:Vec<u8>) -> Vec<u8> {
-    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
-        param,
-        mudu_inner_p2_purchase,
-    ).await
-}
-
-pub async fn mudu_inner_p2_purchase(
-    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
-) -> ::mudu::common::result::RS<
-    ::mudu_contract::procedure::procedure_result::ProcedureResult,
-> {
-    let return_desc = mudu_result_desc_purchase().clone();
-    let res = purchase(
-        param.session_id(),
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[0], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[1], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                String,
-                _,
-            >(&param.param_list()[2], "String")?,
-            
-        
-    ).await;
-    match res {
-        Ok(tuple) => {
-            let return_list = {
-                
-                vec![]
-                
-            };
-            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn mudu_argv_desc_purchase()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    ARGV_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "user_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "amount".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "description".to_string(),
-                    
-                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_result_desc_purchase() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    RESULT_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_proc_desc_purchase()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
-    static _PROC_DESC: std::sync::OnceLock<
-        ::mudu_contract::procedure::proc_desc::ProcDesc,
-    > = std::sync::OnceLock::new();
-    _PROC_DESC
-        .get_or_init(|| {
-            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
-                "wallet".to_string(),
-                "purchase".to_string(),
-                mudu_argv_desc_purchase().clone(),
-                mudu_result_desc_purchase().clone(),
-                false
-            )
-        })
-}
-
-mod mod_purchase {
-    wit_bindgen::generate!({
-        inline:
-        r##"package mudu:mp2-purchase;
-            world mudu-app-mp2-purchase {
-                export mp2-purchase: func(param:list<u8>) -> list<u8>;
-            }
-        "##,
-        async: true
-    });
-
-    #[allow(non_camel_case_types)]
-    #[allow(unused)]
-    struct GuestPurchase {}
-
-    impl Guest for GuestPurchase {
-        async fn mp2_purchase(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_purchase(param).await
-        }
-    }
-
-    export!(GuestPurchase);
-}
 async fn mp2_create_user(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
         param,
@@ -1161,155 +1310,20 @@ mod mod_create_user {
 
     export!(GuestCreateUser);
 }
-async fn mp2_update_user(param:Vec<u8>) -> Vec<u8> {
+async fn mp2_withdraw(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
         param,
-        mudu_inner_p2_update_user,
+        mudu_inner_p2_withdraw,
     ).await
 }
 
-pub async fn mudu_inner_p2_update_user(
+pub async fn mudu_inner_p2_withdraw(
     param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
 ) -> ::mudu::common::result::RS<
     ::mudu_contract::procedure::procedure_result::ProcedureResult,
 > {
-    let return_desc = mudu_result_desc_update_user().clone();
-    let res = update_user(
-        param.session_id(),
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[0], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                String,
-                _,
-            >(&param.param_list()[1], "String")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                String,
-                _,
-            >(&param.param_list()[2], "String")?,
-            
-        
-    ).await;
-    match res {
-        Ok(tuple) => {
-            let return_list = {
-                
-                vec![]
-                
-            };
-            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn mudu_argv_desc_update_user()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    ARGV_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "user_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "name".to_string(),
-                    
-                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "email".to_string(),
-                    
-                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_result_desc_update_user() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    RESULT_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_proc_desc_update_user()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
-    static _PROC_DESC: std::sync::OnceLock<
-        ::mudu_contract::procedure::proc_desc::ProcDesc,
-    > = std::sync::OnceLock::new();
-    _PROC_DESC
-        .get_or_init(|| {
-            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
-                "wallet".to_string(),
-                "update_user".to_string(),
-                mudu_argv_desc_update_user().clone(),
-                mudu_result_desc_update_user().clone(),
-                false
-            )
-        })
-}
-
-mod mod_update_user {
-    wit_bindgen::generate!({
-        inline:
-        r##"package mudu:mp2-update-user;
-            world mudu-app-mp2-update-user {
-                export mp2-update-user: func(param:list<u8>) -> list<u8>;
-            }
-        "##,
-        async: true
-    });
-
-    #[allow(non_camel_case_types)]
-    #[allow(unused)]
-    struct GuestUpdateUser {}
-
-    impl Guest for GuestUpdateUser {
-        async fn mp2_update_user(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_update_user(param).await
-        }
-    }
-
-    export!(GuestUpdateUser);
-}
-async fn mp2_transfer(param:Vec<u8>) -> Vec<u8> {
-    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
-        param,
-        mudu_inner_p2_transfer,
-    ).await
-}
-
-pub async fn mudu_inner_p2_transfer(
-    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
-) -> ::mudu::common::result::RS<
-    ::mudu_contract::procedure::procedure_result::ProcedureResult,
-> {
-    let return_desc = mudu_result_desc_transfer().clone();
-    let res = transfer(
+    let return_desc = mudu_result_desc_withdraw().clone();
+    let res = withdraw(
         param.session_id(),
         
             
@@ -1326,13 +1340,6 @@ pub async fn mudu_inner_p2_transfer(
             >(&param.param_list()[1], "i32")?,
             
         
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[2], "i32")?,
-            
-        
     ).await;
     match res {
         Ok(tuple) => {
@@ -1347,7 +1354,7 @@ pub async fn mudu_inner_p2_transfer(
     }
 }
 
-pub fn mudu_argv_desc_transfer()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+pub fn mudu_argv_desc_withdraw()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
     static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
         std::sync::OnceLock::new();
     ARGV_DESC.get_or_init(||
@@ -1355,14 +1362,7 @@ pub fn mudu_argv_desc_transfer()  -> &'static ::mudu_contract::tuple::tuple_fiel
             ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
                 
                 ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "from_user_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "to_user_id".to_string(),
+                    "user_id".to_string(),
                     
                     <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
                     
@@ -1380,7 +1380,7 @@ pub fn mudu_argv_desc_transfer()  -> &'static ::mudu_contract::tuple::tuple_fiel
     )
 }
 
-pub fn mudu_result_desc_transfer() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+pub fn mudu_result_desc_withdraw() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
     static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
         std::sync::OnceLock::new();
     RESULT_DESC.get_or_init(||
@@ -1392,7 +1392,7 @@ pub fn mudu_result_desc_transfer() -> &'static ::mudu_contract::tuple::tuple_fie
     )
 }
 
-pub fn mudu_proc_desc_transfer()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+pub fn mudu_proc_desc_withdraw()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
     static _PROC_DESC: std::sync::OnceLock<
         ::mudu_contract::procedure::proc_desc::ProcDesc,
     > = std::sync::OnceLock::new();
@@ -1400,20 +1400,20 @@ pub fn mudu_proc_desc_transfer()  -> &'static ::mudu_contract::procedure::proc_d
         .get_or_init(|| {
             ::mudu_contract::procedure::proc_desc::ProcDesc::new(
                 "wallet".to_string(),
-                "transfer".to_string(),
-                mudu_argv_desc_transfer().clone(),
-                mudu_result_desc_transfer().clone(),
+                "withdraw".to_string(),
+                mudu_argv_desc_withdraw().clone(),
+                mudu_result_desc_withdraw().clone(),
                 false
             )
         })
 }
 
-mod mod_transfer {
+mod mod_withdraw {
     wit_bindgen::generate!({
         inline:
-        r##"package mudu:mp2-transfer;
-            world mudu-app-mp2-transfer {
-                export mp2-transfer: func(param:list<u8>) -> list<u8>;
+        r##"package mudu:mp2-withdraw;
+            world mudu-app-mp2-withdraw {
+                export mp2-withdraw: func(param:list<u8>) -> list<u8>;
             }
         "##,
         async: true
@@ -1421,13 +1421,13 @@ mod mod_transfer {
 
     #[allow(non_camel_case_types)]
     #[allow(unused)]
-    struct GuestTransfer {}
+    struct GuestWithdraw {}
 
-    impl Guest for GuestTransfer {
-        async fn mp2_transfer(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_transfer(param).await
+    impl Guest for GuestWithdraw {
+        async fn mp2_withdraw(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_withdraw(param).await
         }
     }
 
-    export!(GuestTransfer);
+    export!(GuestWithdraw);
 }

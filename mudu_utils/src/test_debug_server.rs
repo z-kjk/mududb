@@ -8,7 +8,6 @@ mod test {
     use std::time::Duration;
     use tokio::runtime::Runtime;
     use tokio::task::LocalSet;
-    use tracing::info;
 
     #[test]
     fn test_server() {
@@ -22,6 +21,5 @@ mod test {
             })
         });
         let _ = runtime.block_on(local);
-        info!("test_server test success");
     }
 }

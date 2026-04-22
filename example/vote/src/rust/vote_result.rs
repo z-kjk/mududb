@@ -582,7 +582,10 @@ pub mod object {
 
             let mut updated = VoteResult::new_empty();
             updated
-                .set_field_value("topic", mudu_type::dat_value::DatValue::from_string("t2".to_string()))
+                .set_field_value(
+                    "topic",
+                    mudu_type::dat_value::DatValue::from_string("t2".to_string()),
+                )
                 .unwrap();
             updated
                 .set_field_value("total_votes", mudu_type::dat_value::DatValue::from_i32(12))

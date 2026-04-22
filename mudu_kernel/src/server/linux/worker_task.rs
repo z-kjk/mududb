@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use mudu::common::result::RS;
+use mudu_utils::task_id::TaskID;
 
 pub type WorkerTaskFuture = Pin<Box<dyn Future<Output = RS<()>> + 'static>>;
 
 pub(in crate::server) struct WorkerTask {
     conn_id: Option<u64>,
+    trace_task_id: TaskID,
     future: WorkerTaskFuture,
     queued: Arc<AtomicBool>,
     completed: Arc<AtomicBool>,
@@ -16,9 +18,14 @@ pub(in crate::server) struct WorkerTask {
 }
 
 impl WorkerTask {
-    pub(in crate::server) fn new(conn_id: Option<u64>, future: WorkerTaskFuture) -> Self {
+    pub(in crate::server) fn new(
+        conn_id: Option<u64>,
+        trace_task_id: TaskID,
+        future: WorkerTaskFuture,
+    ) -> Self {
         Self {
             conn_id,
+            trace_task_id,
             future,
             queued: Arc::new(AtomicBool::new(false)),
             completed: Arc::new(AtomicBool::new(false)),
@@ -28,6 +35,10 @@ impl WorkerTask {
 
     pub(in crate::server) fn conn_id(&self) -> Option<u64> {
         self.conn_id
+    }
+
+    pub(in crate::server) fn trace_task_id(&self) -> TaskID {
+        self.trace_task_id
     }
 
     pub(in crate::server) fn future_mut(&mut self) -> WorkerTaskFutureRef<'_> {

@@ -10,7 +10,6 @@ use mudu::common::xid::{XID, new_xid};
 use mudu::error::ec::EC;
 use mudu::error::err::MError;
 use mudu::m_error;
-use mudu_contract::database::db_conn::DBConnSync;
 use mudu_contract::database::prepared_stmt::PreparedStmt;
 use mudu_contract::database::result_set::ResultSetAsync;
 use mudu_contract::database::sql_params::SQLParams;
@@ -24,14 +23,6 @@ use scc::HashMap as SCCHashMap;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex as StdMutex};
-
-pub fn create_libsql_conn(
-    _db_path: &String,
-    _app_name: &String,
-    _ddl_path: &String,
-) -> RS<Arc<dyn DBConnSync>> {
-    todo!()
-}
 
 pub struct LibSQLAsyncConnInner {
     conn: Connection,

@@ -51,12 +51,12 @@ pub fn partition_placement_catalog_desc() -> RS<Arc<TableDesc>> {
 
 pub fn open_partition_placement_catalog(path: &str) -> RS<Relation> {
     let desc = partition_placement_catalog_desc()?;
-    Ok(Relation::new(
+    Relation::new(
         PARTITION_PLACEMENT_CATALOG_TABLE_ID,
         PARTITION_PLACEMENT_CATALOG_PARTITION_ID,
         path.to_string(),
         desc.as_ref(),
-    ))
+    )
 }
 
 pub fn encode_partition_placement_catalog_key(oid: OID) -> RS<Vec<u8>> {
@@ -103,8 +103,7 @@ pub fn load_partition_placements_from_catalog(relation: &Relation) -> RS<Vec<Par
                 mudu::error::ec::EC::DecodeErr,
                 format!(
                     "partition placement catalog key oid {} does not match partition oid {}",
-                    key_oid,
-                    placement.partition_id
+                    key_oid, placement.partition_id
                 )
             ));
         }

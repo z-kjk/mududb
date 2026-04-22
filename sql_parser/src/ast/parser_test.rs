@@ -116,11 +116,17 @@ mod tests {
 
     #[test]
     fn parse_multiple_statements_with_trailing_semicolons() {
-        let stmts = parse_sql("insert into users values (1); delete from users where id = 1;")
-            .unwrap();
+        let stmts =
+            parse_sql("insert into users values (1); delete from users where id = 1;").unwrap();
         assert_eq!(stmts.len(), 2);
-        assert!(matches!(stmts[0], StmtType::Command(StmtCommand::Insert(_))));
-        assert!(matches!(stmts[1], StmtType::Command(StmtCommand::Delete(_))));
+        assert!(matches!(
+            stmts[0],
+            StmtType::Command(StmtCommand::Insert(_))
+        ));
+        assert!(matches!(
+            stmts[1],
+            StmtType::Command(StmtCommand::Delete(_))
+        ));
     }
 
     #[test]
@@ -239,9 +245,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn parse_copy_to_reaches_current_todo_branch() {
-        let _ = parse_sql("copy users to 'users.csv';").unwrap();
+    fn parse_copy_to_statement() {
+        let stmts = parse_sql("copy users to 'users.csv';").unwrap();
+
+        let StmtType::Command(StmtCommand::CopyTo(stmt)) = &stmts[0] else {
+            panic!("expected copy to");
+        };
+        assert_eq!(stmt.copy_from_table_name(), "users");
+        assert_eq!(stmt.copy_to_file_path(), "'users.csv'");
+        assert!(stmt.table_columns().is_empty());
     }
 
     #[test]

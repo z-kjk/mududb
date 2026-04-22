@@ -127,10 +127,9 @@ impl RequestCtx {
     pub(in crate::server) async fn query(
         &self,
         oid: OID,
-        app_name: &str,
+        _app_name: &str,
         sql: &str,
     ) -> RS<HandleResult> {
-        let _ = app_name;
         let response = self
             .worker
             .query(oid, Box::new(sql.to_string()), Box::new(()))
@@ -142,15 +141,19 @@ impl RequestCtx {
     pub(in crate::server) async fn execute_sql(
         &self,
         oid: OID,
-        app_name: &str,
+        _app_name: &str,
         sql: &str,
     ) -> RS<HandleResult> {
-        let _ = app_name;
         let affected_rows = self
             .worker
             .execute(oid, Box::new(sql.to_string()), Box::new(()))
             .await?;
-        let response = ServerResponse::new(TupleFieldDesc::new(Vec::new()), Vec::new(), affected_rows, None);
+        let response = ServerResponse::new(
+            TupleFieldDesc::new(Vec::new()),
+            Vec::new(),
+            affected_rows,
+            None,
+        );
         self.encode_server_response(response)
     }
 
@@ -165,7 +168,12 @@ impl RequestCtx {
             .worker
             .batch(oid, Box::new(sql.to_string()), Box::new(()))
             .await?;
-        let response = ServerResponse::new(TupleFieldDesc::new(Vec::new()), Vec::new(), affected_rows, None);
+        let response = ServerResponse::new(
+            TupleFieldDesc::new(Vec::new()),
+            Vec::new(),
+            affected_rows,
+            None,
+        );
         self.encode_server_response(response)
     }
 

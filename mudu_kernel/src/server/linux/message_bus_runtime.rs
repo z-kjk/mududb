@@ -12,8 +12,8 @@ use tokio::sync::oneshot;
 
 use crate::io::worker_ring::WorkerLocalRing;
 use crate::server::message_bus_api::{
-     EndpointId, Envelope, MessageBus, MessageBusRef, MessageId, OnRecvCallback,
-    OutgoingMessage, RecvFilter, SubscriptionId,
+    EndpointId, Envelope, MessageBus, MessageBusRef, MessageId, OnRecvCallback, OutgoingMessage,
+    RecvFilter, SubscriptionId,
 };
 use crate::server::server_iouring;
 use crate::server::worker_mailbox::WorkerMailboxMsg;
@@ -48,6 +48,9 @@ pub(crate) struct WorkerMessageBus {
     next_msg_id: AtomicU64,
     state: Mutex<MessageBusState>,
 }
+
+unsafe impl Send for WorkerMessageBus {}
+unsafe impl Sync for WorkerMessageBus {}
 
 impl WorkerMessageBus {
     pub(crate) fn new(
@@ -135,7 +138,7 @@ impl WorkerMessageBus {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl MessageBus for WorkerMessageBus {
     fn local_endpoint(&self) -> EndpointId {
         EndpointId::Worker(self.local_worker_id)

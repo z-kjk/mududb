@@ -25,15 +25,20 @@ pub fn error_to_mu(error: MError) -> UniError {
 
 pub fn error_from_mu(error: UniError) -> MError {
     let error_code = EC::from_u32(error.err_code).unwrap_or(EC::InternalErr);
+    let error_msg = if EC::from_u32(error.err_code).is_none() {
+        format!("unknown error code {}: {}", error.err_code, error.err_msg)
+    } else {
+        error.err_msg
+    };
     let src = if error.err_src.is_empty() {
         None
     } else {
         ErrorSource::from_json_str(&error.err_src).into_error_source()
     };
     if error.err_loc.is_empty() {
-        MError::new_with_ec_msg_opt_src(error_code, error.err_msg.to_string(), src)
+        MError::new_with_ec_msg_opt_src(error_code, error_msg, src)
     } else {
-        MError::new(error_code, error.err_msg.to_string(), src, error.err_loc)
+        MError::new(error_code, error_msg, src, error.err_loc)
     }
 }
 

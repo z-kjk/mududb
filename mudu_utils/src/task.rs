@@ -1,5 +1,6 @@
 use std::future::Future;
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use crate::notifier::NotifyWait;
@@ -16,11 +17,50 @@ task_local! {
     static TASK_ID: TaskID;
 }
 
+thread_local! {
+    static CURRENT_POLL_TASK_ID: Cell<Option<TaskID>> = const { Cell::new(None) };
+}
+
+pub struct PollTaskIdGuard {
+    prev: Option<TaskID>,
+}
+
+impl PollTaskIdGuard {
+    pub fn enter(id: TaskID) -> Self {
+        let prev = CURRENT_POLL_TASK_ID.with(|slot| {
+            let prev = slot.get();
+            slot.set(Some(id));
+            prev
+        });
+        Self { prev }
+    }
+}
+
+impl Drop for PollTaskIdGuard {
+    fn drop(&mut self) {
+        CURRENT_POLL_TASK_ID.with(|slot| {
+            slot.set(self.prev);
+        });
+    }
+}
+
 /// The task must create by `task::spawn_local_task`, or `task::spawn_task` to set `TASK_ID` value.
 /// if not, the `LocalKey::get` would raise such panic,
 ///     "cannot access a task-local storage value without setting it first"
 pub fn this_task_id() -> TaskID {
-    TASK_ID.get()
+    try_this_task_id()
+        .expect("cannot access task id: neither tokio task-local nor poll-task TLS is set")
+}
+
+pub fn try_this_task_id() -> Option<TaskID> {
+    TASK_ID
+        .try_with(|id| *id)
+        .ok()
+        .or_else(current_poll_task_id)
+}
+
+pub fn current_poll_task_id() -> Option<TaskID> {
+    CURRENT_POLL_TASK_ID.with(|slot| slot.get())
 }
 
 #[macro_export]

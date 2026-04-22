@@ -11,7 +11,7 @@ pub fn write_slot_to_buf(value_offset: usize, value_size: usize, buf: &mut [u8])
     if Slot::size_of() > buf.len() {
         return Err(m_error!(EC::NotImplemented));
     }
-    slot.to_binary(buf);
+    slot.to_binary(buf)?;
     Ok(())
 }
 
@@ -24,7 +24,15 @@ pub fn write_slot_to_tuple(
     if !field.is_fixed_len() {
         let slot_offset = field.slot().offset();
         if slot_offset + Slot::size_of() > tuple.len() {
-            panic!("Slot offset out of bounds");
+            return Err(m_error!(
+                EC::IndexOutOfRange,
+                format!(
+                    "slot offset {} with size {} exceeds tuple len {}",
+                    slot_offset,
+                    Slot::size_of(),
+                    tuple.len()
+                )
+            ));
         }
         write_slot_to_buf(
             value_offset,

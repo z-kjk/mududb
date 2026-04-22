@@ -151,7 +151,7 @@ impl Planner {
         DropTable::new(
             PDropTable {
                 tx_mgr: self.ctx.tx_mgr.clone(),
-                oid: Some(stmt.table_id),
+                oid: stmt.oid,
             },
             self.ctx.x_contract.clone(),
             self.ctx.meta_mgr.clone(),
@@ -163,8 +163,11 @@ impl Planner {
             PInsertKeyValue {
                 tx_mgr: self.ctx.tx_mgr.clone(),
                 table_id: stmt.table_id,
-                key: VecDatum::new(stmt.key),
-                value: VecDatum::new(stmt.value),
+                rows: stmt
+                    .rows
+                    .into_iter()
+                    .map(|row| (VecDatum::new(row.key), VecDatum::new(row.value)))
+                    .collect(),
             },
             self.ctx.x_contract.clone(),
             self.ctx.meta_mgr.clone(),

@@ -107,8 +107,8 @@ In current implementations this includes scalar values, tuple return values, and
 The result type alias `RS` is defined as:
 
 ```rust
-use mudu::error::error::ER;
-pub type RS<X> = Result<X, ER>;  // ER: Error
+use mudu::error::err::MError;
+pub type RS<X> = Result<X, MError>;
 ```
 
 ## CRUD (Create/Read/Update/Delete) Operations in Mudu Procedures
@@ -240,7 +240,7 @@ content="[KeyTrait](../lang.common/proc_key_traits.md#L-L)"
 
 <!--
 quote_begin
-content="[Entity](../../mudu/src/database/entity.rs#L12-L34)"
+content="[Entity](../../mudu_contract/src/database/entity.rs#L12-L34)"
 lang="rust"
 -->
 
@@ -275,7 +275,7 @@ pub trait Entity: private::Sealed + Datum {
 
 <!--
 quote_begin
-content="[SQLStmt](../../mudu/src/database/sql_stmt.rs#L3-L8)"
+content="[SQLStmt](../../mudu_contract/src/database/sql_stmt.rs#L3-L8)"
 lang="rust"
 -->
 
@@ -293,7 +293,7 @@ pub trait SQLStmt: fmt::Debug + fmt::Display + Sync + Send {
 
 <!--
 quote_begin
-content="[DatumDyn](../../mudu/src/data_type/datum.rs#L18-L38)"
+content="[DatumDyn](../../mudu_type/src/datum.rs#L17-L37)"
 lang="rust"
 -->
 

@@ -392,7 +392,9 @@ mod tests {
                     "value".to_string(),
                     DatType::default_for(DatTypeID::String),
                 )]),
-                vec![TupleValue::from(vec![DatValue::from_string("1".to_string())])],
+                vec![TupleValue::from(vec![DatValue::from_string(
+                    "1".to_string(),
+                )])],
                 0,
                 None,
             ))
@@ -400,12 +402,22 @@ mod tests {
 
         async fn execute(&mut self, request: ClientRequest) -> RS<ServerResponse> {
             self.last_execute = Some(request);
-            Ok(ServerResponse::new(TupleFieldDesc::new(vec![]), vec![], 2, None))
+            Ok(ServerResponse::new(
+                TupleFieldDesc::new(vec![]),
+                vec![],
+                2,
+                None,
+            ))
         }
 
         async fn batch(&mut self, request: ClientRequest) -> RS<ServerResponse> {
             self.last_batch = Some(request);
-            Ok(ServerResponse::new(TupleFieldDesc::new(vec![]), vec![], 3, None))
+            Ok(ServerResponse::new(
+                TupleFieldDesc::new(vec![]),
+                vec![],
+                3,
+                None,
+            ))
         }
 
         async fn get(&mut self, request: GetRequest) -> RS<GetResponse> {

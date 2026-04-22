@@ -17,7 +17,7 @@ impl Eq for TupleKey {}
 impl PartialEq<Self> for TupleKey {
     fn eq(&self, other: &Self) -> bool {
         let r = tuple_equal(self.desc(), self.buf(), other.buf());
-        r.unwrap_or_else(|e| panic!("error {}", e))
+        r.unwrap_or(false)
     }
 }
 
@@ -30,14 +30,16 @@ impl PartialOrd<Self> for TupleKey {
 impl Hash for TupleKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let r = tuple_hash(self.desc(), self.buf(), state);
-        r.unwrap_or_else(|e| panic!("TupleKey Hash::hash error {}", e))
+        if r.is_err() {
+            self.buf().hash(state);
+        }
     }
 }
 
 impl Ord for TupleKey {
     fn cmp(&self, other: &Self) -> Ordering {
         let r = tuple_compare(self.desc(), self.buf(), other.buf());
-        r.unwrap_or_else(|e| panic!("TupleKey Ord::cmp error {}", e))
+        r.unwrap_or_else(|_| self.buf().cmp(other.buf()))
     }
 }
 
@@ -88,14 +90,14 @@ impl<'a, K: AsRef<[u8]>> _KeyRef<'a, K> {
 impl<K: AsRef<[u8]>> Equivalent<TupleKey> for _KeyRef<'_, K> {
     fn equivalent(&self, key: &TupleKey) -> bool {
         let r = tuple_equal(key.desc(), self.key_ref.as_ref(), key.buf());
-        r.unwrap_or_else(|e| panic!("error {}", e))
+        r.unwrap_or(false)
     }
 }
 
 impl<K: AsRef<[u8]>> Comparable<TupleKey> for _KeyRef<'_, K> {
     fn compare(&self, key: &TupleKey) -> Ordering {
         let r = tuple_compare(key.desc(), self.key_ref.as_ref(), key.buf());
-        r.unwrap_or_else(|e| panic!("error {}", e))
+        r.unwrap_or_else(|_| self.key_ref.as_ref().cmp(key.buf().as_slice()))
     }
 }
 
@@ -108,14 +110,14 @@ impl<K: AsRef<[u8]>> _Key<K> {
 impl<K: AsRef<[u8]>> Equivalent<TupleKey> for _Key<K> {
     fn equivalent(&self, key: &TupleKey) -> bool {
         let r = tuple_equal(key.desc(), self.key.as_ref(), key.buf());
-        r.unwrap_or_else(|e| panic!("error {}", e))
+        r.unwrap_or(false)
     }
 }
 
 impl<K: AsRef<[u8]>> Comparable<TupleKey> for _Key<K> {
     fn compare(&self, key: &TupleKey) -> Ordering {
         let r = tuple_compare(key.desc(), self.key.as_ref(), key.buf());
-        r.unwrap_or_else(|e| panic!("error {}", e))
+        r.unwrap_or_else(|_| self.key.as_ref().cmp(key.buf().as_slice()))
     }
 }
 

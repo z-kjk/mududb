@@ -27,14 +27,11 @@ pub fn msg_pack_binary_to_value(binary: &[u8]) -> RS<(MsgPackValue, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{msg_pack_binary_to_value, msg_pack_value_to_binary, MsgPackValue};
+    use super::{MsgPackValue, msg_pack_binary_to_value, msg_pack_value_to_binary};
 
     #[test]
     fn msg_pack_roundtrip_preserves_value_and_position() {
-        let value = MsgPackValue::Array(vec![
-            MsgPackValue::from(7),
-            MsgPackValue::from("neo"),
-        ]);
+        let value = MsgPackValue::Array(vec![MsgPackValue::from(7), MsgPackValue::from("neo")]);
 
         let binary = msg_pack_value_to_binary(&value).unwrap();
         let (decoded, used) = msg_pack_binary_to_value(&binary).unwrap();

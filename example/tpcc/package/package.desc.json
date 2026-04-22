@@ -3,7 +3,7 @@
     "tpcc": [
       {
         "module_name": "tpcc",
-        "proc_name": "tpcc_stock_level",
+        "proc_name": "tpcc_order_status",
         "param_desc": {
           "fields": [
             {
@@ -25,7 +25,7 @@
                 "id": "I32",
                 "param": null
               },
-              "name": "threshold"
+              "name": "customer_id"
             }
           ]
         },
@@ -33,8 +33,12 @@
           "fields": [
             {
               "dat_type": {
-                "id": "I32",
-                "param": null
+                "id": "String",
+                "param": {
+                  "String": {
+                    "length": 65536
+                  }
+                }
               },
               "name": "0"
             }
@@ -73,6 +77,46 @@
                 "param": null
               },
               "name": "amount"
+            }
+          ]
+        },
+        "return_desc": {
+          "fields": [
+            {
+              "dat_type": {
+                "id": "I32",
+                "param": null
+              },
+              "name": "0"
+            }
+          ]
+        }
+      },
+      {
+        "module_name": "tpcc",
+        "proc_name": "tpcc_stock_level",
+        "param_desc": {
+          "fields": [
+            {
+              "dat_type": {
+                "id": "I32",
+                "param": null
+              },
+              "name": "warehouse_id"
+            },
+            {
+              "dat_type": {
+                "id": "I32",
+                "param": null
+              },
+              "name": "district_id"
+            },
+            {
+              "dat_type": {
+                "id": "I32",
+                "param": null
+              },
+              "name": "threshold"
             }
           ]
         },
@@ -158,50 +202,6 @@
                 }
               },
               "name": "quantities"
-            }
-          ]
-        },
-        "return_desc": {
-          "fields": [
-            {
-              "dat_type": {
-                "id": "String",
-                "param": {
-                  "String": {
-                    "length": 65536
-                  }
-                }
-              },
-              "name": "0"
-            }
-          ]
-        }
-      },
-      {
-        "module_name": "tpcc",
-        "proc_name": "tpcc_order_status",
-        "param_desc": {
-          "fields": [
-            {
-              "dat_type": {
-                "id": "I32",
-                "param": null
-              },
-              "name": "warehouse_id"
-            },
-            {
-              "dat_type": {
-                "id": "I32",
-                "param": null
-              },
-              "name": "district_id"
-            },
-            {
-              "dat_type": {
-                "id": "I32",
-                "param": null
-              },
-              "name": "customer_id"
             }
           ]
         },

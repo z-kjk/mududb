@@ -9,4 +9,3 @@ pub enum ConnectionState {
     Closing,
     Closed,
 }
-

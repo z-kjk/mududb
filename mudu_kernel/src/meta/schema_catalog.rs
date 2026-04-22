@@ -50,12 +50,12 @@ pub fn schema_catalog_desc() -> RS<Arc<TableDesc>> {
 
 pub fn open_schema_catalog(path: &str) -> RS<Relation> {
     let desc = schema_catalog_desc()?;
-    Ok(Relation::new(
+    Relation::new(
         SCHEMA_CATALOG_TABLE_ID,
         SCHEMA_CATALOG_PARTITION_ID,
         path.to_string(),
         desc.as_ref(),
-    ))
+    )
 }
 
 pub fn encode_schema_catalog_key(oid: OID) -> RS<Vec<u8>> {

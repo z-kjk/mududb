@@ -751,7 +751,8 @@ pub mod object {
             assert_eq!(from_value.get_vote_type().as_deref(), Some("single"));
             assert_eq!(from_value.get_end_time(), &Some(100));
 
-            let from_binary = Votes::from_binary(vote.to_binary(Votes::dat_type()).unwrap().as_ref()).unwrap();
+            let from_binary =
+                Votes::from_binary(vote.to_binary(Votes::dat_type()).unwrap().as_ref()).unwrap();
             assert_eq!(from_binary.get_visibility_rule().as_deref(), Some("always"));
 
             let mut updated = Votes::new_empty();
@@ -759,7 +760,10 @@ pub mod object {
                 .set_field_value("max_choices", mudu_type::dat_value::DatValue::from_i32(3))
                 .unwrap();
             updated
-                .set_field_value("vote_type", mudu_type::dat_value::DatValue::from_string("multiple".to_string()))
+                .set_field_value(
+                    "vote_type",
+                    mudu_type::dat_value::DatValue::from_string("multiple".to_string()),
+                )
                 .unwrap();
             assert_eq!(updated.get_max_choices(), &Some(3));
             assert_eq!(updated.get_vote_type().as_deref(), Some("multiple"));

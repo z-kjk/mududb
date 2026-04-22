@@ -892,7 +892,7 @@ pub(crate) fn complete_socket_io(
     op: SocketInflightOp,
     result: i32,
     ring: &WorkerLocalRing,
-) -> RS<()> {
+) -> RS<bool> {
     match op {
         SocketInflightOp::Open(request) => {
             if result < 0 {
@@ -900,6 +900,7 @@ pub(crate) fn complete_socket_io(
             } else {
                 request.finish(Ok(result as RawFd));
             }
+            Ok(true)
         }
         SocketInflightOp::Connect(request) => {
             if result < 0 {
@@ -907,6 +908,7 @@ pub(crate) fn complete_socket_io(
             } else {
                 request.finish(Ok(()));
             }
+            Ok(true)
         }
         SocketInflightOp::Accept(request) => {
             if result < 0 {
@@ -915,6 +917,7 @@ pub(crate) fn complete_socket_io(
                 let remote_addr = raw_to_socket_addr(request.addr())?;
                 request.finish(Ok((result as RawFd, remote_addr)));
             }
+            Ok(true)
         }
         SocketInflightOp::Recv(request) => {
             if result < 0 {
@@ -922,36 +925,43 @@ pub(crate) fn complete_socket_io(
             } else {
                 request.finish(Ok(result as usize));
             }
+            Ok(true)
         }
         SocketInflightOp::Send(mut request) => {
             if result < 0 {
                 request.finish(Err(completion_error("socket send", result)));
+                Ok(true)
             } else {
                 request.advance(result as usize);
                 if request.is_complete() {
                     let total = request.total_len();
                     request.finish(Ok(total));
+                    Ok(true)
                 } else {
                     ring.requeue_front(
                         op_id,
                         WorkerRingOp::Socket(SocketIoRequest::Send(*request)),
                     )?;
+                    Ok(false)
                 }
             }
         }
         SocketInflightOp::SendRef(mut request) => {
             if result < 0 {
                 request.finish(Err(completion_error("socket send", result)));
+                Ok(true)
             } else {
                 request.advance(result as usize);
                 if request.is_complete() {
                     let total = request.total_len();
                     request.finish(Ok(total));
+                    Ok(true)
                 } else {
                     ring.requeue_front(
                         op_id,
                         WorkerRingOp::Socket(SocketIoRequest::SendRef(*request)),
                     )?;
+                    Ok(false)
                 }
             }
         }
@@ -961,6 +971,7 @@ pub(crate) fn complete_socket_io(
             } else {
                 request.finish(Ok(()));
             }
+            Ok(true)
         }
         SocketInflightOp::Close(request) => {
             if result < 0 {
@@ -968,9 +979,9 @@ pub(crate) fn complete_socket_io(
             } else {
                 request.finish(Ok(()));
             }
+            Ok(true)
         }
     }
-    Ok(())
 }
 
 #[cfg(all(test, target_os = "linux"))]

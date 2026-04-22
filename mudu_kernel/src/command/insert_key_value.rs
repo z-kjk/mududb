@@ -69,24 +69,30 @@ impl CmdExec for InsertKeyValue {
 impl _InsertKeyValue {
     async fn prepare(&self) -> RS<()> {
         let _ = self.meta_mgr.get_table_by_id(self.param.table_id).await?;
-        if self.param.key.data().is_empty() {
-            return Err(m_error!(ER::NoSuchElement, "key is empty"));
+        for (key, _value) in &self.param.rows {
+            if key.data().is_empty() {
+                return Err(m_error!(ER::NoSuchElement, "key is empty"));
+            }
         }
         Ok(())
     }
 
     async fn insert(&mut self) -> RS<()> {
         task_trace!();
-        self.x_contract
-            .insert(
-                self.param.tx_mgr.clone(),
-                self.param.table_id,
-                &self.param.key,
-                &self.param.value,
-                &OptInsert::default(),
-            )
-            .await?;
-        self.affected_rows = 1;
+        let mut affected_rows = 0;
+        for (key, value) in &self.param.rows {
+            self.x_contract
+                .insert(
+                    self.param.tx_mgr.clone(),
+                    self.param.table_id,
+                    key,
+                    value,
+                    &OptInsert::default(),
+                )
+                .await?;
+            affected_rows += 1;
+        }
+        self.affected_rows = affected_rows;
         Ok(())
     }
 

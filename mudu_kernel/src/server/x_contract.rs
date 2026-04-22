@@ -12,6 +12,7 @@ use mudu_type::dt_function::send_binary;
 use std::ops::Bound;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use tracing::debug;
 
 use crate::contract::meta_mgr::MetaMgr;
 use crate::contract::schema_table::SchemaTable;
@@ -21,10 +22,8 @@ use crate::server::message_bus_api::{
     current_message_bus, DeliveryMode, EndpointId, Envelope, MessageKind, OutgoingMessage,
     RecvFilter,
 };
+use crate::server::partition_router::{PartitionRouter, DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID};
 use crate::server::partition_rpc::{PartitionRpcRequest, PartitionRpcResponse, RpcBound};
-use crate::server::partition_router::{
-    PartitionRouter, DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID,
-};
 use crate::server::worker_snapshot::{KvItem, WorkerSnapshot, WorkerSnapshotMgr};
 use crate::server::worker_storage::WorkerStorage;
 use crate::server::worker_tx_manager::WorkerTxManager;
@@ -63,11 +62,11 @@ struct VecCursorInner {
 }
 
 impl IoUringXContract {
-    pub fn new(meta_mgr: Arc<dyn MetaMgr>) -> Self {
+    pub fn new(meta_mgr: Arc<dyn MetaMgr>) -> RS<Self> {
         Self::with_log_and_data_dir(meta_mgr, None, 0, 0, 0, default_worker_storage_data_dir())
     }
 
-    pub fn with_log(meta_mgr: Arc<dyn MetaMgr>, log: Option<ChunkedWorkerLogBackend>) -> Self {
+    pub fn with_log(meta_mgr: Arc<dyn MetaMgr>, log: Option<ChunkedWorkerLogBackend>) -> RS<Self> {
         Self::with_log_and_data_dir(meta_mgr, log, 0, 0, 0, default_worker_storage_data_dir())
     }
 
@@ -78,13 +77,17 @@ impl IoUringXContract {
         default_unpartitioned_worker_id: OID,
         partition_id: OID,
         data_dir: String,
-    ) -> Self {
+    ) -> RS<Self> {
         let storage = Arc::new(WorkerStorage::new(meta_mgr.clone(), partition_id, data_dir));
         storage.register_global();
-        storage
-            .bootstrap_existing_tables_sync()
-            .unwrap_or_else(|e| panic!("bootstrap worker storage from meta failed: {e}"));
-        Self {
+        storage.bootstrap_existing_tables_sync().map_err(|e| {
+            m_error!(
+                EC::StorageErr,
+                "bootstrap worker storage from meta failed",
+                e
+            )
+        })?;
+        Ok(Self {
             worker_id,
             default_unpartitioned_worker_id,
             meta_mgr: meta_mgr.clone(),
@@ -94,10 +97,10 @@ impl IoUringXContract {
             log,
             snapshot_mgr: WorkerSnapshotMgr::default(),
             tx_lock: XLockMgr::new(),
-        }
+        })
     }
 
-    pub fn with_worker_log(log: ChunkedWorkerLogBackend) -> Self {
+    pub fn with_worker_log(log: ChunkedWorkerLogBackend) -> RS<Self> {
         Self::with_worker_log_and_data_dir(log, 0, 0, 0, default_worker_storage_data_dir())
     }
 
@@ -107,9 +110,9 @@ impl IoUringXContract {
         default_unpartitioned_worker_id: OID,
         partition_id: OID,
         data_dir: String,
-    ) -> Self {
+    ) -> RS<Self> {
         let meta_mgr = MetaMgrFactory::create(data_dir.clone())
-            .unwrap_or_else(|e| panic!("create worker meta manager failed: {e}"));
+            .map_err(|e| m_error!(EC::DBInternalError, "create worker meta manager failed", e))?;
         Self::with_log_and_data_dir(
             meta_mgr,
             Some(log.clone()),
@@ -413,9 +416,13 @@ impl IoUringXContract {
     }
 
     pub fn ensure_partition_rpc_handler(self: &Arc<Self>) -> RS<()> {
-        if self.worker_id == 0 || self.partition_rpc_registered.swap(true, Ordering::SeqCst) {
+        if self.partition_rpc_registered.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        debug!(
+            worker_id = self.worker_id,
+            "registering partition rpc handler"
+        );
         let bus = current_message_bus()?;
         let contract = self.clone();
         bus.on_recv_callback(
@@ -445,9 +452,14 @@ fn default_worker_storage_data_dir() -> String {
 
 impl IoUringXContract {
     async fn handle_partition_rpc(&self, envelope: Envelope) -> RS<()> {
-        let request = rmp_serde::from_slice::<PartitionRpcRequest>(envelope.payload()).map_err(|e| {
-            m_error!(EC::DecodeErr, "decode partition rpc request error", e)
-        })?;
+        debug!(
+            worker_id = self.worker_id,
+            src = ?envelope.src(),
+            msg_id = envelope.msg_id(),
+            "received partition rpc request"
+        );
+        let request = rmp_serde::from_slice::<PartitionRpcRequest>(envelope.payload())
+            .map_err(|e| m_error!(EC::DecodeErr, "decode partition rpc request error", e))?;
         let response = match self.execute_partition_rpc(request).await {
             Ok(response) => response,
             Err(err) => PartitionRpcResponse::Err(err.to_string()),
@@ -455,16 +467,26 @@ impl IoUringXContract {
         let payload = rmp_serde::to_vec(&response)
             .map_err(|e| m_error!(EC::EncodeErr, "encode partition rpc response error", e))?;
         let bus = current_message_bus()?;
-        block_on(bus.send(
+        bus.send(
             envelope.src().clone(),
             OutgoingMessage::new(PARTITION_RPC_RESPONSE_KIND, payload)
                 .with_correlation_id(envelope.msg_id())
                 .with_delivery(DeliveryMode::Response),
-        ))?;
+        )
+        .await?;
+        debug!(
+            worker_id = self.worker_id,
+            dst = ?envelope.src(),
+            correlation_id = envelope.msg_id(),
+            "sent partition rpc response"
+        );
         Ok(())
     }
 
-    async fn execute_partition_rpc(&self, request: PartitionRpcRequest) -> RS<PartitionRpcResponse> {
+    async fn execute_partition_rpc(
+        &self,
+        request: PartitionRpcRequest,
+    ) -> RS<PartitionRpcResponse> {
         match request {
             PartitionRpcRequest::ReadKey {
                 table_id,
@@ -472,6 +494,14 @@ impl IoUringXContract {
                 key,
                 select,
             } => {
+                debug!(
+                    worker_id = self.worker_id,
+                    table_id,
+                    partition_id,
+                    key_len = key.len(),
+                    select_len = select.len(),
+                    "execute partition rpc read_key"
+                );
                 let desc = self.meta_mgr.get_table_by_id(table_id).await?;
                 let tx_mgr = self.worker_begin_tx()?;
                 let opt_value = self
@@ -493,6 +523,15 @@ impl IoUringXContract {
                 end,
                 select,
             } => {
+                debug!(
+                    worker_id = self.worker_id,
+                    table_id,
+                    partition_id,
+                    select_len = select.len(),
+                    start = ?start,
+                    end = ?end,
+                    "execute partition rpc read_range"
+                );
                 let desc = self.meta_mgr.get_table_by_id(table_id).await?;
                 let tx_mgr = self.worker_begin_tx()?;
                 let rows = self
@@ -522,6 +561,14 @@ impl IoUringXContract {
                 key,
                 value,
             } => {
+                debug!(
+                    worker_id = self.worker_id,
+                    table_id,
+                    partition_id,
+                    key_len = key.len(),
+                    value_len = value.len(),
+                    "execute partition rpc insert"
+                );
                 let tx_mgr = self.worker_begin_tx()?;
                 let current = self
                     .storage
@@ -542,6 +589,13 @@ impl IoUringXContract {
                 partition_id,
                 key,
             } => {
+                debug!(
+                    worker_id = self.worker_id,
+                    table_id,
+                    partition_id,
+                    key_len = key.len(),
+                    "execute partition rpc delete"
+                );
                 let tx_mgr = self.worker_begin_tx()?;
                 let deleted = self
                     .storage
@@ -556,6 +610,14 @@ impl IoUringXContract {
                 key,
                 values,
             } => {
+                debug!(
+                    worker_id = self.worker_id,
+                    table_id,
+                    partition_id,
+                    key_len = key.len(),
+                    value_pairs = values.len(),
+                    "execute partition rpc update"
+                );
                 let desc = self.meta_mgr.get_table_by_id(table_id).await?;
                 let tx_mgr = self.worker_begin_tx()?;
                 let current = self
@@ -568,13 +630,7 @@ impl IoUringXContract {
                 };
                 let updated = apply_value_update(&current, &VecDatum::new(values), &desc)?;
                 self.storage
-                    .put_on_partition(
-                        table_id,
-                        Some(partition_id),
-                        key,
-                        updated,
-                        tx_mgr.as_ref(),
-                    )
+                    .put_on_partition(table_id, Some(partition_id), key, updated, tx_mgr.as_ref())
                     .await?;
                 self.worker_commit_tx_async(tx_mgr).await?;
                 Ok(PartitionRpcResponse::Update(1))
@@ -582,25 +638,47 @@ impl IoUringXContract {
         }
     }
 
-    fn send_partition_rpc(
+    async fn send_partition_rpc(
         &self,
         target_worker_id: OID,
         request: PartitionRpcRequest,
     ) -> RS<PartitionRpcResponse> {
+        debug!(
+            worker_id = self.worker_id,
+            target_worker_id,
+            request = ?request,
+            "sending partition rpc request"
+        );
         let bus = current_message_bus()?;
         let payload = rmp_serde::to_vec(&request)
             .map_err(|e| m_error!(EC::EncodeErr, "encode partition rpc request error", e))?;
-        let msg_id = block_on(bus.send(
-            EndpointId::Worker(target_worker_id),
-            OutgoingMessage::new(PARTITION_RPC_REQUEST_KIND, payload)
-                .with_delivery(DeliveryMode::Request),
-        ))?;
-        let envelope = block_on(bus.recv(RecvFilter {
+        let msg_id = bus
+            .send(
+                EndpointId::Worker(target_worker_id),
+                OutgoingMessage::new(PARTITION_RPC_REQUEST_KIND, payload)
+                    .with_delivery(DeliveryMode::Request),
+            )
+            .await?;
+        debug!(
+            worker_id = self.worker_id,
+            target_worker_id, msg_id, "waiting partition rpc response"
+        );
+        let envelope = bus
+            .recv(RecvFilter {
                 src: Some(EndpointId::Worker(target_worker_id)),
                 dst: Some(EndpointId::Worker(self.worker_id)),
                 kind: Some(PARTITION_RPC_RESPONSE_KIND),
                 correlation_id: Some(msg_id),
-            }))?;
+            })
+            .await?;
+        debug!(
+            worker_id = self.worker_id,
+            target_worker_id,
+            msg_id,
+            received_msg_id = envelope.msg_id(),
+            received_correlation_id = ?envelope.correlation_id(),
+            "received partition rpc response envelope"
+        );
         rmp_serde::from_slice(envelope.payload())
             .map_err(|e| m_error!(EC::DecodeErr, "decode partition rpc response error", e))
     }
@@ -613,19 +691,24 @@ impl IoUringXContract {
         key: Vec<u8>,
         select: Vec<AttrIndex>,
     ) -> RS<Option<Vec<DatBin>>> {
-        match self.send_partition_rpc(
-            target_worker_id,
-            PartitionRpcRequest::ReadKey {
-                table_id,
-                partition_id,
-                key,
-                select,
-            },
-        )?
+        match self
+            .send_partition_rpc(
+                target_worker_id,
+                PartitionRpcRequest::ReadKey {
+                    table_id,
+                    partition_id,
+                    key,
+                    select,
+                },
+            )
+            .await?
         {
             PartitionRpcResponse::ReadKey(value) => Ok(value),
             PartitionRpcResponse::Err(err) => Err(m_error!(EC::InternalErr, err)),
-            _ => Err(m_error!(EC::InternalErr, "unexpected read_key rpc response")),
+            _ => Err(m_error!(
+                EC::InternalErr,
+                "unexpected read_key rpc response"
+            )),
         }
     }
 
@@ -638,20 +721,25 @@ impl IoUringXContract {
         end: RpcBound,
         select: Vec<AttrIndex>,
     ) -> RS<Vec<Vec<DatBin>>> {
-        match self.send_partition_rpc(
-            target_worker_id,
-            PartitionRpcRequest::ReadRange {
-                table_id,
-                partition_id,
-                start,
-                end,
-                select,
-            },
-        )?
+        match self
+            .send_partition_rpc(
+                target_worker_id,
+                PartitionRpcRequest::ReadRange {
+                    table_id,
+                    partition_id,
+                    start,
+                    end,
+                    select,
+                },
+            )
+            .await?
         {
             PartitionRpcResponse::ReadRange(rows) => Ok(rows),
             PartitionRpcResponse::Err(err) => Err(m_error!(EC::InternalErr, err)),
-            _ => Err(m_error!(EC::InternalErr, "unexpected read_range rpc response")),
+            _ => Err(m_error!(
+                EC::InternalErr,
+                "unexpected read_range rpc response"
+            )),
         }
     }
 
@@ -663,15 +751,18 @@ impl IoUringXContract {
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> RS<()> {
-        match self.send_partition_rpc(
-            target_worker_id,
-            PartitionRpcRequest::Insert {
-                table_id,
-                partition_id,
-                key,
-                value,
-            },
-        )? {
+        match self
+            .send_partition_rpc(
+                target_worker_id,
+                PartitionRpcRequest::Insert {
+                    table_id,
+                    partition_id,
+                    key,
+                    value,
+                },
+            )
+            .await?
+        {
             PartitionRpcResponse::Insert => Ok(()),
             PartitionRpcResponse::Err(err) => Err(m_error!(EC::InternalErr, err)),
             _ => Err(m_error!(EC::InternalErr, "unexpected insert rpc response")),
@@ -685,14 +776,17 @@ impl IoUringXContract {
         partition_id: OID,
         key: Vec<u8>,
     ) -> RS<usize> {
-        match self.send_partition_rpc(
-            target_worker_id,
-            PartitionRpcRequest::Delete {
-                table_id,
-                partition_id,
-                key,
-            },
-        )? {
+        match self
+            .send_partition_rpc(
+                target_worker_id,
+                PartitionRpcRequest::Delete {
+                    table_id,
+                    partition_id,
+                    key,
+                },
+            )
+            .await?
+        {
             PartitionRpcResponse::Delete(rows) => Ok(rows),
             PartitionRpcResponse::Err(err) => Err(m_error!(EC::InternalErr, err)),
             _ => Err(m_error!(EC::InternalErr, "unexpected delete rpc response")),
@@ -707,15 +801,18 @@ impl IoUringXContract {
         key: Vec<u8>,
         values: Vec<(AttrIndex, Vec<u8>)>,
     ) -> RS<usize> {
-        match self.send_partition_rpc(
-            target_worker_id,
-            PartitionRpcRequest::Update {
-                table_id,
-                partition_id,
-                key,
-                values,
-            },
-        )? {
+        match self
+            .send_partition_rpc(
+                target_worker_id,
+                PartitionRpcRequest::Update {
+                    table_id,
+                    partition_id,
+                    key,
+                    values,
+                },
+            )
+            .await?
+        {
             PartitionRpcResponse::Update(rows) => Ok(rows),
             PartitionRpcResponse::Err(err) => Err(m_error!(EC::InternalErr, err)),
             _ => Err(m_error!(EC::InternalErr, "unexpected update rpc response")),
@@ -735,15 +832,35 @@ impl IoUringXContract {
         values: &VecDatum,
         _opt_insert: &OptInsert,
     ) -> RS<()> {
+        debug!(
+            worker_id = self.worker_id,
+            table_id,
+            key_cols = keys.data().len(),
+            value_cols = values.data().len(),
+            "insert begin"
+        );
         let key = build_key_tuple(keys, &desc)?;
         let value = build_value_tuple(values, &desc)?;
         let target_partition = self
             .partition_router
             .route_exact_partition(table_id, desc.as_ref(), keys)
             .await?;
+        debug!(
+            worker_id = self.worker_id,
+            table_id,
+            target_partition = ?target_partition,
+            "insert routed partition"
+        );
         if let Some(partition_id) = target_partition {
             match self.resolve_partition_worker(partition_id).await? {
                 Some(worker_id) if self.worker_id != 0 && worker_id != self.worker_id => {
+                    debug!(
+                        worker_id = self.worker_id,
+                        table_id,
+                        partition_id,
+                        target_worker_id = worker_id,
+                        "insert forwarding to remote worker"
+                    );
                     return self
                         .remote_insert(worker_id, table_id, partition_id, key, value)
                         .await;
@@ -751,6 +868,12 @@ impl IoUringXContract {
                 _ => {}
             }
         }
+        debug!(
+            worker_id = self.worker_id,
+            table_id,
+            target_partition = ?target_partition,
+            "insert checking existing key locally"
+        );
         let contain_key = self
             .storage
             .get_on_partition(table_id, target_partition, &key, tx_mgr.as_ref())
@@ -758,6 +881,12 @@ impl IoUringXContract {
         if contain_key.is_some() {
             Err(m_error!(EC::ExistingSuchElement, "existing key"))
         } else {
+            debug!(
+                worker_id = self.worker_id,
+                table_id,
+                target_partition = ?target_partition,
+                "insert writing key locally"
+            );
             self.storage
                 .put_on_partition(table_id, target_partition, key, value, tx_mgr.as_ref())
                 .await
@@ -1178,10 +1307,7 @@ fn build_tuple_for<const IS_KEY: bool>(
         if completed[datum_index].is_some() {
             continue;
         }
-        let default = field
-            .type_desc()
-            .dat_type_id()
-            .fn_default()(field.type_desc())
+        let default = field.type_desc().dat_type_id().fn_default()(field.type_desc())
             .map_err(|e| e.to_m_err())?;
         completed[datum_index] =
             Some(send_binary(&default, field.type_desc()).map_err(|e| e.to_m_err())?);
@@ -1283,40 +1409,36 @@ fn apply_value_update(current: &TupleRaw, values: &VecDatum, desc: &TableDesc) -
 }
 
 fn single_put_batch(xid: u64, key: Vec<u8>, value: Vec<u8>) -> XLBatch {
-    XLBatch {
-        entries: vec![crate::wal::xl_entry::XLEntry {
-            xid,
-            ops: vec![
-                crate::wal::xl_entry::TxOp::Begin,
-                crate::wal::xl_entry::TxOp::Insert(crate::wal::xl_data_op::XLInsert {
-                    table_id: 0,
-                    partition_id: 0,
-                    tuple_id: 0,
-                    key,
-                    value,
-                }),
-                crate::wal::xl_entry::TxOp::Commit,
-            ],
-        }],
-    }
+    XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+        xid,
+        ops: vec![
+            crate::wal::xl_entry::TxOp::Begin,
+            crate::wal::xl_entry::TxOp::Insert(crate::wal::xl_data_op::XLInsert {
+                table_id: 0,
+                partition_id: 0,
+                tuple_id: 0,
+                key,
+                value,
+            }),
+            crate::wal::xl_entry::TxOp::Commit,
+        ],
+    }])
 }
 
 fn single_delete_batch(xid: u64, key: Vec<u8>) -> XLBatch {
-    XLBatch {
-        entries: vec![crate::wal::xl_entry::XLEntry {
-            xid,
-            ops: vec![
-                crate::wal::xl_entry::TxOp::Begin,
-                crate::wal::xl_entry::TxOp::Delete(crate::wal::xl_data_op::XLDelete {
-                    table_id: 0,
-                    partition_id: 0,
-                    tuple_id: 0,
-                    key,
-                }),
-                crate::wal::xl_entry::TxOp::Commit,
-            ],
-        }],
-    }
+    XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+        xid,
+        ops: vec![
+            crate::wal::xl_entry::TxOp::Begin,
+            crate::wal::xl_entry::TxOp::Delete(crate::wal::xl_data_op::XLDelete {
+                table_id: 0,
+                partition_id: 0,
+                tuple_id: 0,
+                key,
+            }),
+            crate::wal::xl_entry::TxOp::Commit,
+        ],
+    }])
 }
 
 #[cfg(test)]
@@ -1506,7 +1628,7 @@ mod tests {
         let meta_mgr = Arc::new(TestMetaMgr::new());
         let schema = test_schema();
         let table_id = schema.id();
-        let contract = IoUringXContract::with_log(meta_mgr, Some(log));
+        let contract = IoUringXContract::with_log(meta_mgr, Some(log)).unwrap();
 
         let ddl_tx = block_on(contract.begin_tx()).unwrap();
         block_on(contract.create_table(ddl_tx.clone(), &schema)).unwrap();
@@ -1550,35 +1672,33 @@ mod tests {
         let meta_mgr = Arc::new(TestMetaMgr::new());
         let schema = test_schema();
         let table_id = schema.id();
-        let contract = IoUringXContract::with_log(meta_mgr, None);
+        let contract = IoUringXContract::with_log(meta_mgr, None).unwrap();
 
         let tx_mgr = block_on(contract.begin_tx()).unwrap();
         block_on(contract.create_table(tx_mgr.clone(), &schema)).unwrap();
         block_on(contract.commit_tx(tx_mgr)).unwrap();
-        let batch = XLBatch {
-            entries: vec![crate::wal::xl_entry::XLEntry {
-                xid: 11,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Insert(XLInsert {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"wk".to_vec(),
-                        value: b"wv".to_vec(),
-                    }),
-                    TxOp::Insert(XLInsert {
-                        table_id,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: build_key_tuple(&key_row(3), &meta_table(&schema).unwrap()).unwrap(),
-                        value: build_value_tuple(&value_row(30), &meta_table(&schema).unwrap())
-                            .unwrap(),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        };
+        let batch = XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+            xid: 11,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"wk".to_vec(),
+                    value: b"wv".to_vec(),
+                }),
+                TxOp::Insert(XLInsert {
+                    table_id,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: build_key_tuple(&key_row(3), &meta_table(&schema).unwrap()).unwrap(),
+                    value: build_value_tuple(&value_row(30), &meta_table(&schema).unwrap())
+                        .unwrap(),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
 
         contract.replay_worker_log_batch(batch).unwrap();
 
@@ -1623,24 +1743,23 @@ mod tests {
                 .unwrap(),
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
 
         contract.worker_put(b"wk".to_vec(), b"wv".to_vec()).unwrap();
-        let batch = XLBatch {
-            entries: vec![crate::wal::xl_entry::XLEntry {
-                xid: 7,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Delete(crate::wal::xl_data_op::XLDelete {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"wk".to_vec(),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        };
+        let batch = XLBatch::new(vec![crate::wal::xl_entry::XLEntry {
+            xid: 7,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Delete(crate::wal::xl_data_op::XLDelete {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"wk".to_vec(),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
 
         contract.replay_worker_log_batch(batch).unwrap();
 
@@ -1652,7 +1771,7 @@ mod tests {
         let meta_mgr = Arc::new(TestMetaMgr::new());
         let schema = test_schema();
         let table_id = schema.id();
-        let contract = IoUringXContract::with_log(meta_mgr, None);
+        let contract = IoUringXContract::with_log(meta_mgr, None).unwrap();
 
         let ddl_tx = block_on(contract.begin_tx()).unwrap();
         block_on(contract.create_table(ddl_tx.clone(), &schema)).unwrap();

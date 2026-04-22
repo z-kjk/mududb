@@ -55,12 +55,17 @@ pub struct BoundCreateTable {
 
 #[derive(Clone, Debug)]
 pub struct BoundDropTable {
-    pub table_id: OID,
+    pub oid: Option<OID>,
 }
 
 #[derive(Clone, Debug)]
 pub struct BoundInsert {
     pub table_id: OID,
+    pub rows: Vec<BoundInsertRow>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundInsertRow {
     pub key: Vec<(AttrIndex, Vec<u8>)>,
     pub value: Vec<(AttrIndex, Vec<u8>)>,
 }

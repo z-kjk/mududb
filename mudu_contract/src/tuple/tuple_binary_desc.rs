@@ -2,7 +2,9 @@ use crate::tuple::field_desc::FieldDesc;
 use crate::tuple::slot::Slot;
 use mudu::common::cmp_order::Order;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
 use mudu::error::err::MError;
+use mudu::m_error;
 use mudu_type::dat_type::DatType;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -22,7 +24,10 @@ pub struct TupleBinaryDesc {
 impl TupleBinaryDesc {
     pub fn from(type_desc: Vec<DatType>) -> RS<Self> {
         if !is_normalized(&type_desc)? {
-            panic!("must be normalized");
+            return Err(m_error!(
+                EC::ParseErr,
+                "tuple type descriptor must be normalized"
+            ));
         }
         let mut total_fixed_size: usize = 0;
         let mut fixed_count: usize = 0;
@@ -40,7 +45,7 @@ impl TupleBinaryDesc {
                     }
                 },
                 Err(e) => {
-                    panic!("get type length error, {:?}", e);
+                    return Err(m_error!(EC::TypeErr, "get type length error", e));
                 }
             }
         }
@@ -69,7 +74,7 @@ impl TupleBinaryDesc {
                     }
                 },
                 Err(e) => {
-                    panic!("get type length error, {:?}", e);
+                    return Err(m_error!(EC::TypeErr, "get type length error", e));
                 }
             }
         }
@@ -178,6 +183,7 @@ fn is_normalized(vec_type_desc: &[DatType]) -> RS<bool> {
 #[cfg(test)]
 mod tests {
     use crate::tuple::tuple_binary_desc::TupleBinaryDesc;
+    use mudu::error::ec::EC;
     use mudu_type::dat_type::DatType;
     use mudu_type::dat_type_id::DatTypeID;
     #[test]
@@ -200,5 +206,15 @@ mod tests {
             TupleBinaryDesc::normalized_type_desc_vec(dat_type_and_index).unwrap();
 
         let _desc = TupleBinaryDesc::from(norm_types).unwrap();
+    }
+
+    #[test]
+    fn tuple_desc_rejects_unnormalized_type_order() {
+        let err = TupleBinaryDesc::from(vec![
+            DatType::new_no_param(DatTypeID::String),
+            DatType::new_no_param(DatTypeID::I32),
+        ])
+        .unwrap_err();
+        assert_eq!(err.ec(), EC::ParseErr);
     }
 }

@@ -5,12 +5,13 @@ use anyhow::{Result, anyhow};
 use clap::{Arg, Command};
 use mudu::common::app_info::AppInfo;
 use mudu::utils::json::read_json;
+use mudu::utils::json::to_json_str;
 use mudu::utils::toml::read_toml;
 use mudu_contract::procedure::mod_proc_desc::ModProcDesc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -285,6 +286,21 @@ fn add_file_to_zip<P: AsRef<Path>>(
     Ok(())
 }
 
+fn add_bytes_to_zip(zip_writer: &mut ZipWriter<File>, bytes: &[u8], zip_path: &str) -> Result<()> {
+    zip_writer.start_file(
+        zip_path,
+        SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+    )?;
+    zip_writer.write_all(bytes)?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct PackageManifest {
+    format_version: u16,
+    files: Vec<String>,
+}
+
 fn create_package(config: &MPKPackage) -> Result<()> {
     // Create output directory if it doesn't exist
     if let Some(parent) = PathBuf::from(&config.output_path).parent() {
@@ -295,11 +311,35 @@ fn create_package(config: &MPKPackage) -> Result<()> {
     let file = File::create(&config.output_path)?;
     let mut zip = ZipWriter::new(file);
 
+    // Build and embed a manifest for forward/backward-compatible extensions.
+    let mut file_list = vec![
+        "package.cfg.json".to_string(),
+        "package.desc.json".to_string(),
+        "ddl.sql".to_string(),
+        "initdb.sql".to_string(),
+    ];
+    for wasm_path in &config.wasm_files {
+        let wasm_path = PathBuf::from(wasm_path);
+        let file_name = wasm_path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| anyhow!("Invalid WASM file path: {}", wasm_path.display()))?;
+        file_list.push(file_name.to_string());
+    }
+    file_list.push("package.manifest.json".to_string());
+    let manifest = PackageManifest {
+        format_version: 1,
+        files: file_list,
+    };
+    let manifest_text =
+        to_json_str(&manifest).map_err(|e| anyhow!("encode package manifest error: {e}"))?;
+
     // Add required files with their specific names
     add_file_to_zip(&mut zip, &config.package_cfg, "package.cfg.json")?;
     add_file_to_zip(&mut zip, &config.package_desc, "package.desc.json")?;
     add_file_to_zip(&mut zip, &config.ddl_sql, "ddl.sql")?;
     add_file_to_zip(&mut zip, &config.initdb_sql, "initdb.sql")?;
+    add_bytes_to_zip(&mut zip, manifest_text.as_bytes(), "package.manifest.json")?;
 
     // Add WASM files with their original names
     for wasm_path in &config.wasm_files {
@@ -453,6 +493,7 @@ mod tests {
             "package.desc.json",
             "ddl.sql",
             "initdb.sql",
+            "package.manifest.json",
             "test1.wasm",
             "test2.wasm",
         ];

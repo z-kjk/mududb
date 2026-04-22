@@ -19,6 +19,7 @@ use mudu_contract::procedure::procedure_param::ProcedureParam;
 use mudu_contract::procedure::procedure_result::ProcedureResult;
 use mudu_kernel::server::worker_local::WorkerLocalRef;
 use mudu_utils::task_id::{TaskID, new_task_id};
+use mudu_utils::task_trace;
 use scc::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
@@ -184,6 +185,7 @@ impl AppInstImplInner {
         param: ProcedureParam,
         worker_local: Option<WorkerLocalRef>,
     ) -> RS<ProcedureResult> {
+        task_trace!();
         if !self.enable_async {
             return Err(m_error!(
                 EC::DBInternalError,
@@ -255,6 +257,7 @@ impl AppInstImplInner {
         proc_name: &String,
         param: ProcedureParam,
     ) -> RS<(Procedure, ProcedureParam, bool)> {
+        task_trace!();
         let procedure = self.procedure(mod_name, proc_name).ok_or_else(|| {
             m_error!(
                 EC::NoneErr,

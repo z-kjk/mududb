@@ -7,7 +7,7 @@ use crate::service::service::Service;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
 use mudu::m_error;
-use mudu_utils::notifier::{notify_wait, Notifier, Waiter};
+use mudu_utils::notifier::{Notifier, Waiter, notify_wait};
 use mudu_utils::sync::async_task::TaskWrapper;
 use std::net::SocketAddr;
 use std::str::FromStr;

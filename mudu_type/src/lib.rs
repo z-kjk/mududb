@@ -33,4 +33,3 @@ pub mod record;
 pub mod string;
 pub mod type_error;
 //pub mod universal;
-pub mod db_type;

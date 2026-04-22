@@ -785,7 +785,7 @@ pub(crate) fn complete_file_io(
     op: FileInflightOp,
     result: i32,
     ring: &WorkerLocalRing,
-) -> RS<()> {
+) -> RS<bool> {
     match op {
         FileInflightOp::Open(request) => {
             if result < 0 {
@@ -793,6 +793,7 @@ pub(crate) fn complete_file_io(
             } else {
                 request.finish(Ok(result as RawFd));
             }
+            Ok(true)
         }
         FileInflightOp::Close(request) => {
             if result < 0 {
@@ -800,6 +801,7 @@ pub(crate) fn complete_file_io(
             } else {
                 request.finish(Ok(()));
             }
+            Ok(true)
         }
         FileInflightOp::Read { request, mut buf } => {
             if result < 0 {
@@ -808,12 +810,14 @@ pub(crate) fn complete_file_io(
                 buf.truncate(result as usize);
                 request.finish(Ok(buf));
             }
+            Ok(true)
         }
         FileInflightOp::Write(mut request) => {
             if result < 0 {
                 if !request.blind_write() {
                     request.finish(Err(completion_error("file write", result)));
                 }
+                Ok(true)
             } else {
                 request.advance(result as usize);
                 if request.is_complete() {
@@ -821,8 +825,10 @@ pub(crate) fn complete_file_io(
                     if !request.blind_write() {
                         request.finish(Ok(total));
                     }
+                    Ok(true)
                 } else {
                     ring.requeue_front(op_id, WorkerRingOp::File(FileIoRequest::Write(*request)))?;
+                    Ok(false)
                 }
             }
         }
@@ -832,9 +838,9 @@ pub(crate) fn complete_file_io(
             } else {
                 request.finish_success();
             }
+            Ok(true)
         }
     }
-    Ok(())
 }
 
 fn std_file_to_io_file(file: std::fs::File) -> IoFile {

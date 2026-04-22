@@ -1,22 +1,24 @@
 use super::{
-    find_app, parse_json_object_body, to_param, AsyncIoUringInvokeClientFactory, HttpApi,
-    PartitionRouteEntry, PartitionRouteRequest, PartitionRouteResponse, ServerTopology,
-    TokioIoUringInvokeClientFactory, WorkerTopology,
+    AsyncIoUringInvokeClientFactory, HttpApi, PartitionRouteEntry, PartitionRouteRequest,
+    PartitionRouteResponse, ServerTopology, TokioIoUringInvokeClientFactory, WorkerTopology,
+    find_app, parse_json_object_body, to_param,
 };
 use crate::backend::app_mgr::AppMgr;
 use crate::backend::mududb_cfg::MuduDBCfg;
 use async_trait::async_trait;
 use mudu::common::result::RS;
-use mudu_kernel::contract::meta_mgr::MetaMgr;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu::utils::json::JsonValue;
 use mudu_binding::procedure::procedure_invoke;
 use mudu_contract::procedure::proc_desc::ProcDesc;
+use mudu_kernel::contract::meta_mgr::MetaMgr;
+use mudu_kernel::meta::meta_mgr_factory::MetaMgrFactory;
 use mudu_kernel::mudu_conn::mudu_conn_async::{
     set_default_remote_addr, set_default_remote_worker_id,
 };
-use mudu_kernel::meta::meta_mgr_factory::MetaMgrFactory;
 use mudu_kernel::server::partition_router::{
-    PartitionRouter, DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID,
+    DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID, PartitionRouter,
 };
 use mudu_kernel::server::worker_registry::WorkerRegistry;
 use serde_json::Value;
@@ -37,15 +39,16 @@ impl IoUringHttpApi {
         app_mgr: Arc<dyn AppMgr>,
         cfg: &MuduDBCfg,
         worker_registry: Arc<WorkerRegistry>,
-    ) -> Self {
-        Self::with_client_factory(
+    ) -> RS<Self> {
+        let meta_mgr = MetaMgrFactory::create(cfg.db_path.clone())
+            .map_err(|e| m_error!(EC::DBInternalError, "create http meta manager failed", e))?;
+        Ok(Self::with_client_factory(
             app_mgr,
             format!("{}:{}", cfg.listen_ip, cfg.tcp_listen_port),
             worker_registry,
-            MetaMgrFactory::create(cfg.db_path.clone())
-                .unwrap_or_else(|e| panic!("create http meta manager failed: {e}")),
+            meta_mgr,
             Arc::new(TokioIoUringInvokeClientFactory),
-        )
+        ))
     }
 
     pub fn with_client_factory(
@@ -67,17 +70,23 @@ impl IoUringHttpApi {
         }
     }
 
-    async fn resolve_partition_worker(&self, partition_id: mudu::common::id::OID) -> RS<mudu::common::id::OID> {
+    async fn resolve_partition_worker(
+        &self,
+        partition_id: mudu::common::id::OID,
+    ) -> RS<mudu::common::id::OID> {
         if let Some(worker_id) = self.meta_mgr.get_partition_worker(partition_id).await? {
             return Ok(worker_id);
         }
         if partition_id == DEFAULT_UNPARTITIONED_TABLE_PARTITION_ID {
-            return self.worker_registry.default_global_worker_id().ok_or_else(|| {
-                mudu::m_error!(
-                    mudu::error::ec::EC::NoSuchElement,
-                    "worker registry has no default global worker"
-                )
-            });
+            return self
+                .worker_registry
+                .default_global_worker_id()
+                .ok_or_else(|| {
+                    mudu::m_error!(
+                        mudu::error::ec::EC::NoSuchElement,
+                        "worker registry has no default global worker"
+                    )
+                });
         }
         Err(mudu::m_error!(
             mudu::error::ec::EC::NoSuchElement,
@@ -181,12 +190,14 @@ impl HttpApi for IoUringHttpApi {
                     "partition route request cannot specify both key and range"
                 ));
             }
-            vec![self
-                .partition_router
-                .route_rule_exact_partition(
+            vec![
+                self.partition_router.route_rule_exact_partition(
                     &rule,
-                    &key.into_iter().map(|value| value.into_bytes()).collect::<Vec<_>>(),
-                )?]
+                    &key.into_iter()
+                        .map(|value| value.into_bytes())
+                        .collect::<Vec<_>>(),
+                )?,
+            ]
         } else {
             let start = match request.start {
                 Some(values) => Bound::Included(

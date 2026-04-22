@@ -11,14 +11,17 @@ mod legacy_http_api;
 pub use legacy_http_api::LegacyHttpApi;
 
 #[cfg(target_os = "linux")]
+#[path = "linux/tokio_iouring_invoke_client_factory.rs"]
 mod tokio_iouring_invoke_client_factory;
 #[cfg(target_os = "linux")]
 pub use tokio_iouring_invoke_client_factory::TokioIoUringInvokeClientFactory;
 
 #[cfg(target_os = "linux")]
+#[path = "linux/tokio_iouring_invoke_client.rs"]
 mod tokio_iouring_invoke_client;
 
 #[cfg(target_os = "linux")]
+#[path = "linux/io_uring_http_api.rs"]
 mod io_uring_http_api;
 #[cfg(target_os = "linux")]
 pub use io_uring_http_api::IoUringHttpApi;
@@ -28,12 +31,13 @@ use crate::service::app_inst::AppInst;
 use crate::service::runtime::Runtime;
 use actix_cors::Cors;
 use actix_web::http::StatusCode;
-use actix_web::{delete, get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{App, HttpResponse, HttpServer, Responder, delete, get, post, web};
 use async_trait::async_trait;
 use base64::Engine;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
 use mudu::error::ec::EC;
+use mudu::error::err::MError;
 use mudu::m_error;
 use mudu::utils::json::JsonValue;
 use mudu_binding::procedure::procedure_invoke;
@@ -115,7 +119,15 @@ pub struct PartitionRouteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PartitionRouteEntry {
+    #[serde(
+        serialize_with = "serialize_oid_as_unioid",
+        deserialize_with = "deserialize_oid_from_unioid"
+    )]
     pub partition_id: mudu::common::id::OID,
+    #[serde(
+        serialize_with = "serialize_oid_as_unioid",
+        deserialize_with = "deserialize_oid_from_unioid"
+    )]
     pub worker_id: mudu::common::id::OID,
 }
 
@@ -270,64 +282,66 @@ fn configure_routes(cfg: &mut web::ServiceConfig, capabilities: HttpApiCapabilit
     }
 }
 
+fn http_ok(data: Value) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "data": data,
+        "error": Value::Null,
+        "status": 0,
+        "message": "ok"
+    }))
+}
+
+fn error_payload(err: &MError) -> Value {
+    serde_json::json!({
+        "code": err.ec().to_u32(),
+        "name": format!("{:?}", err.ec()),
+        "message": err.message(),
+        "source": err.err_src().to_json_str(),
+        "location": err.loc()
+    })
+}
+
+fn http_err(user_message: impl Into<String>, err: &MError) -> HttpResponse {
+    let msg = user_message.into();
+    let payload = error_payload(err);
+    HttpResponse::Ok().json(serde_json::json!({
+        "ok": false,
+        "data": payload.clone(),
+        "error": payload.clone(),
+        "status": err.ec().to_u32(),
+        "message": msg,
+    }))
+}
+
 #[post("/mudu/partition/route")]
-async fn partition_route(
-    body: String,
-    context: web::Data<HttpApiContext>,
-) -> impl Responder {
+async fn partition_route(body: String, context: web::Data<HttpApiContext>) -> impl Responder {
     let request = match serde_json::from_str::<PartitionRouteRequest>(&body) {
         Ok(request) => request,
         Err(e) => {
-            return HttpResponse::Ok().json(serde_json::json!({
-                "status": 1001,
-                "message": "fail to parse partition route request",
-                "data": e.to_string(),
-            }))
+            let err = m_error!(EC::DecodeErr, "fail to parse partition route request", e);
+            return http_err("fail to parse partition route request", &err);
         }
     };
     match context.api.route_partition(request).await {
-        Ok(route) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": route,
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": "fail to route partition",
-            "data": e,
-        })),
+        Ok(route) => http_ok(serde_json::to_value(route).unwrap_or(Value::Null)),
+        Err(e) => http_err("fail to route partition", &e),
     }
 }
 
 #[get("/mudu/server/topology")]
 async fn server_topology(context: web::Data<HttpApiContext>) -> impl Responder {
     match context.api.server_topology().await {
-        Ok(topology) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": topology,
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": "fail to get server topology",
-            "data": e,
-        })),
+        Ok(topology) => http_ok(serde_json::to_value(topology).unwrap_or(Value::Null)),
+        Err(e) => http_err("fail to get server topology", &e),
     }
 }
 
 #[get("/mudu/app/list")]
 async fn app_list(context: web::Data<HttpApiContext>) -> impl Responder {
     match context.api.list_apps().await {
-        Ok(list) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": list,
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": "fail to get app list",
-            "data": e,
-        })),
+        Ok(list) => http_ok(serde_json::to_value(list).unwrap_or(Value::Null)),
+        Err(e) => http_err("fail to get app list", &e),
     }
 }
 
@@ -338,16 +352,17 @@ async fn app_proc_list(
 ) -> impl Responder {
     let app_name = path.into_inner();
     match context.api.list_procedures(&app_name).await {
-        Ok(procedures) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": ProcedureList { app_name, procedures },
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": format!("fail to get procedure list of app {}", app_name),
-            "data": e,
-        })),
+        Ok(procedures) => http_ok(
+            serde_json::to_value(ProcedureList {
+                app_name,
+                procedures,
+            })
+            .unwrap_or(Value::Null),
+        ),
+        Err(e) => http_err(
+            format!("fail to get procedure list of app {}", app_name),
+            &e,
+        ),
     }
 }
 
@@ -362,22 +377,18 @@ async fn app_proc_detail(
         .procedure_detail(&app_name, &mod_name, &proc_name)
         .await
     {
-        Ok((desc, param_json_default, return_json_default)) => HttpResponse::Ok().json(
-            serde_json::json!({
-                "status": 0,
-                "message": "ok",
-                "data": {
-                    "proc_desc": desc,
-                    "param_default": param_json_default,
-                    "return_default": return_json_default,
-                },
-            }),
-        ),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": format!("fail to get procedure {}/{}/{} detail ", app_name, mod_name, proc_name),
-            "data": e,
+        Ok((desc, param_json_default, return_json_default)) => http_ok(serde_json::json!({
+            "proc_desc": desc,
+            "param_default": param_json_default,
+            "return_default": return_json_default,
         })),
+        Err(e) => http_err(
+            format!(
+                "fail to get procedure {}/{}/{} detail ",
+                app_name, mod_name, proc_name
+            ),
+            &e,
+        ),
     }
 }
 
@@ -386,22 +397,10 @@ async fn install(body: web::Bytes, context: web::Data<HttpApiContext>) -> impl R
     let body_str = String::from_utf8_lossy(&body).to_string();
     match decode_install_request(&body_str) {
         Ok(binary) => match context.api.install_mpk(binary).await {
-            Ok(()) => HttpResponse::Ok().json(serde_json::json!({
-                "status": 0,
-                "message": "ok",
-                "data": JsonValue::Null,
-            })),
-            Err(e) => HttpResponse::Ok().json(serde_json::json!({
-                "status": 1001,
-                "message": format!("fail to install package {:?}", body_str),
-                "data": e,
-            })),
+            Ok(()) => http_ok(JsonValue::Null),
+            Err(e) => http_err(format!("fail to install package {:?}", body_str), &e),
         },
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": format!("fail to install package {:?}", body_str),
-            "data": e,
-        })),
+        Err(e) => http_err(format!("fail to install package {:?}", body_str), &e),
     }
 }
 
@@ -409,16 +408,8 @@ async fn install(body: web::Bytes, context: web::Data<HttpApiContext>) -> impl R
 async fn uninstall(path: web::Path<String>, context: web::Data<HttpApiContext>) -> impl Responder {
     let app_name = path.into_inner();
     match context.api.uninstall_app(&app_name).await {
-        Ok(()) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": JsonValue::Null,
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": format!("fail to uninstall app {}", app_name),
-            "data": e,
-        })),
+        Ok(()) => http_ok(JsonValue::Null),
+        Err(e) => http_err(format!("fail to uninstall app {}", app_name), &e),
     }
 }
 
@@ -436,16 +427,8 @@ async fn invoke(
         .invoke_json(&app_name, &mod_name, &proc_name, body_str)
         .await
     {
-        Ok(value) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 0,
-            "message": "ok",
-            "data": value,
-        })),
-        Err(e) => HttpResponse::Ok().json(serde_json::json!({
-            "status": 1001,
-            "message": format!("fail to invoke procedure {}", proc),
-            "data": e,
-        })),
+        Ok(value) => http_ok(value),
+        Err(e) => http_err(format!("fail to invoke procedure {}", proc), &e),
     }
 }
 
@@ -573,7 +556,7 @@ async fn find_app(app_mgr: &dyn AppMgr, app_name: &str) -> RS<AppListItem> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use actix_web::{test, App};
+    use actix_web::{App, test};
     #[cfg(target_os = "linux")]
     use mudu::common::app_info::AppInfo;
     #[cfg(target_os = "linux")]
@@ -590,9 +573,9 @@ mod test {
     #[cfg(target_os = "linux")]
     use mudu_kernel::contract::partition_rule_binding::PartitionPlacement;
     #[cfg(target_os = "linux")]
-    use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
-    #[cfg(target_os = "linux")]
     use mudu_kernel::meta::meta_mgr_factory::MetaMgrFactory;
+    #[cfg(target_os = "linux")]
+    use mudu_kernel::server::async_func_runtime::AsyncFuncInvoker;
     #[cfg(target_os = "linux")]
     use mudu_type::dat_type_id::DatTypeID;
     #[cfg(target_os = "linux")]
@@ -811,8 +794,10 @@ mod test {
     #[cfg(target_os = "linux")]
     #[actix_web::test]
     async fn iouring_http_api_routes_point_and_range_by_rule_name() {
-        let log_dir =
-            std::env::temp_dir().join(format!("http_api_route_test_{}", mudu::common::id::gen_oid()));
+        let log_dir = std::env::temp_dir().join(format!(
+            "http_api_route_test_{}",
+            mudu::common::id::gen_oid()
+        ));
         let registry =
             mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 4)
                 .unwrap();
@@ -897,8 +882,10 @@ mod test {
     #[cfg(target_os = "linux")]
     #[actix_web::test]
     async fn iouring_http_api_lists_metadata_and_topology() {
-        let log_dir =
-            std::env::temp_dir().join(format!("http_api_meta_list_{}", mudu::common::id::gen_oid()));
+        let log_dir = std::env::temp_dir().join(format!(
+            "http_api_meta_list_{}",
+            mudu::common::id::gen_oid()
+        ));
         let registry =
             mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 3)
                 .unwrap();
@@ -925,10 +912,8 @@ mod test {
             api.list_procedures("app1").await.unwrap(),
             vec!["mod1/proc1".to_string()]
         );
-        let (desc, param_json, return_json) = api
-            .procedure_detail("app1", "mod1", "proc1")
-            .await
-            .unwrap();
+        let (desc, param_json, return_json) =
+            api.procedure_detail("app1", "mod1", "proc1").await.unwrap();
         assert_eq!(desc.proc_name(), "proc1");
         assert_eq!(param_json["value"], 0);
         assert_eq!(return_json["value"], 0);
@@ -941,8 +926,10 @@ mod test {
     #[cfg(target_os = "linux")]
     #[actix_web::test]
     async fn iouring_http_api_surfaces_close_session_failure() {
-        let log_dir =
-            std::env::temp_dir().join(format!("http_api_close_err_{}", mudu::common::id::gen_oid()));
+        let log_dir = std::env::temp_dir().join(format!(
+            "http_api_close_err_{}",
+            mudu::common::id::gen_oid()
+        ));
         let registry =
             mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 2)
                 .unwrap();
@@ -974,8 +961,10 @@ mod test {
     #[cfg(target_os = "linux")]
     #[actix_web::test]
     async fn iouring_http_api_rejects_mixed_route_request_shapes() {
-        let log_dir = std::env::temp_dir()
-            .join(format!("http_api_route_shape_{}", mudu::common::id::gen_oid()));
+        let log_dir = std::env::temp_dir().join(format!(
+            "http_api_route_shape_{}",
+            mudu::common::id::gen_oid()
+        ));
         let registry =
             mudu_kernel::server::worker_registry::load_or_create_worker_registry(&log_dir, 2)
                 .unwrap();
@@ -1017,6 +1006,9 @@ mod test {
             })
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("cannot specify both key and range"));
+        assert!(
+            err.to_string()
+                .contains("cannot specify both key and range")
+        );
     }
 }

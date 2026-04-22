@@ -722,8 +722,7 @@ async fn load_partition_routing_async(partition_count: usize) -> RS<PartitionRou
 }
 
 fn topology_is_unsupported(err: &str) -> bool {
-    err.contains("server topology is not supported")
-        || err.contains("\"code\":\"NotImplemented\"")
+    err.contains("server topology is not supported") || err.contains("\"code\":\"NotImplemented\"")
 }
 
 fn default_partition_routing(partition_count: usize) -> PartitionRouting {

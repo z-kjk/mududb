@@ -14,6 +14,7 @@ use std::os::fd::{IntoRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use tracing::debug;
+
 pub(crate) struct RecoveryCoordinator {
     total_workers: usize,
     state: Mutex<RecoveryState>,
@@ -107,9 +108,8 @@ pub(crate) fn sync_serve_iouring(mut cfg: IoUringTcpServerConfig, stop: Waiter) 
         let stop = stop_flag.clone();
         let recovery_coordinator = recovery_coordinator.clone();
         let mailbox_fd = mailbox_fds[worker_id];
-        let handle = mudu_sys::task::spawn_thread_named(
-            format!("iouring-ring-worker-{worker_id}"),
-            move || {
+        let handle =
+            mudu_sys::task::spawn_thread_named(format!("worker-{worker_id}"), move || {
                 let listener_fd = match listener {
                     Some(listener) => listener.into_raw_fd(),
                     None => create_listener_fd(listen_addr)?,
@@ -138,30 +138,49 @@ pub(crate) fn sync_serve_iouring(mut cfg: IoUringTcpServerConfig, stop: Waiter) 
                 )?;
                 let r = loop_state.run();
                 r
-            },
-        )?;
+            })?;
         handles.push(handle);
     }
-
     let mut worker_stats = Vec::<WorkerLoopStats>::with_capacity(cfg.worker_count());
+
+    let mut first_error: Option<mudu::error::err::MError> = None;
     for handle in handles {
         let result = handle
             .join()
             .map_err(|_| m_error!(EC::ThreadErr, "join io_uring worker error"))?;
-        worker_stats.push(result?);
+        match result {
+            Ok(stats) => {
+                worker_stats.push(stats);
+            }
+            Err(e) => {
+                tracing::error!("io_uring worker error, {}", e);
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
     }
 
-    let notify_result = notifier
-        .join()
-        .map_err(|_| m_error!(EC::ThreadErr, "join io_uring shutdown notifier error"))?;
-    notify_result?;
-
+    if first_error.is_none() {
+        let notify_result = notifier
+            .join()
+            .map_err(|_| m_error!(EC::ThreadErr, "join io_uring shutdown notifier error"))?;
+        notify_result?;
+        log_worker_stats(&worker_stats);
+    }
     for fd in mailbox_fds {
         unsafe {
             libc::close(fd);
         }
     }
-    log_worker_stats(&worker_stats);
+
+    if let Some(err) = first_error {
+        return Err(m_error!(
+            EC::ThreadErr,
+            "io_uring backend stopped due to worker error",
+            err
+        ));
+    }
     Ok(())
 }
 

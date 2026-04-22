@@ -65,8 +65,8 @@ pub fn write_json<S: Serialize, P: AsRef<Path>>(object: &S, path: P) -> RS<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        from_json_str, from_json_value, read_json, to_json_str, to_json_value, write_json,
-        JsonValue,
+        JsonValue, from_json_str, from_json_value, read_json, to_json_str, to_json_value,
+        write_json,
     };
     use serde::{Deserialize, Serialize};
     use std::time::{SystemTime, UNIX_EPOCH};

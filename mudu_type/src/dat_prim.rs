@@ -43,10 +43,6 @@ impl DatPrim {
         &self.dat_type
     }
 
-    pub fn dat_param(&self) -> &DatType {
-        &self.dat_type
-    }
-
     pub fn has_param(&self) -> bool {
         !self.dat_type.has_no_param()
     }

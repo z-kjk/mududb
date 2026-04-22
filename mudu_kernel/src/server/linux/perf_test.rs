@@ -8,7 +8,7 @@ use mudu::m_error;
 use mudu_contract::protocol::{
     decode_error_response, decode_get_response, decode_put_response,
     decode_session_create_response, encode_get_request, encode_put_request,
-    encode_session_create_request, Frame, GetRequest, MessageType, PutRequest,
+    encode_session_create_request, Frame, FrameHeader, GetRequest, MessageType, PutRequest,
     SessionCreateRequest, HEADER_LEN,
 };
 use mudu_utils::log::log_setup;
@@ -21,7 +21,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -140,8 +140,7 @@ impl AsyncPerfClient {
             .read_exact(&mut header)
             .await
             .map_err(|e| m_error!(EC::NetErr, "read response header error", e))?;
-        let payload_len =
-            u32::from_be_bytes([header[16], header[17], header[18], header[19]]) as usize;
+        let payload_len = FrameHeader::decode_header_bytes(&header)?.payload_len() as usize;
         let mut frame_bytes = Vec::with_capacity(HEADER_LEN + payload_len);
         frame_bytes.extend_from_slice(&header);
         if payload_len > 0 {
@@ -190,6 +189,13 @@ fn reserve_listener() -> Option<TcpListener> {
 fn network_perf_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_network_perf_test() -> MutexGuard<'static, ()> {
+    match network_perf_test_lock().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn bind_reserved_listener(port: u16) -> std::io::Result<TcpListener> {
@@ -405,7 +411,7 @@ fn avg_us(samples: &[u64]) -> Option<f64> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iouring_backend_perf_put_get() -> RS<()> {
-    let _guard = network_perf_test_lock().lock().unwrap();
+    let _guard = lock_network_perf_test();
     log_setup("info");
     let notifier = NotifyWait::new();
     {
@@ -536,7 +542,7 @@ async fn iouring_backend_perf_put_get() -> RS<()> {
     wait_for_clients_ready(clients, ready_clients.as_ref(), setup_error.as_ref()).await?;
     start_clients.store(true, Ordering::Release);
     start_notify.notify_waiters();
-    info!("begin testing");
+
     let started_at = mudu_sys::time::instant_now();
     mudu_sys::task::sleep(bench_duration).await?;
     let elapsed = started_at.elapsed();
@@ -605,7 +611,7 @@ async fn iouring_backend_perf_put_get() -> RS<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iouring_backend_recovery_replays_worker_logs() -> RS<()> {
-    let _guard = network_perf_test_lock().lock().unwrap();
+    let _guard = lock_network_perf_test();
     let Some(listener) = reserve_listener() else {
         return Ok(());
     };
@@ -649,17 +655,21 @@ async fn iouring_backend_recovery_replays_worker_logs() -> RS<()> {
     stop_notifier.notify_all();
     server_thread.join().unwrap()?;
 
+    let Some(restart_listener) = reserve_listener() else {
+        return Ok(());
+    };
+    let restart_port = restart_listener.local_addr().unwrap().port();
     let (stop_notifier, server_thread) = spawn_iouring_server(
-        bind_reserved_listener(port).unwrap(),
+        restart_listener,
         worker_count,
         &data_dir,
         64 * 1024 * 1024,
         Some(registry.clone()),
     );
-    wait_until_server_ready_or_exit_async(port, &server_thread).await?;
+    wait_until_server_ready_or_exit_async(restart_port, &server_thread).await?;
 
     {
-        let mut client = AsyncPerfClient::connect(port).await?;
+        let mut client = AsyncPerfClient::connect(restart_port).await?;
         client.session_id = client
             .create_session(Some(
                 serde_json::json!({
@@ -681,7 +691,7 @@ async fn iouring_backend_recovery_replays_worker_logs() -> RS<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iouring_backend_recovery_replays_across_multiple_chunks() -> RS<()> {
-    let _guard = network_perf_test_lock().lock().unwrap();
+    let _guard = lock_network_perf_test();
     let Some(listener) = reserve_listener() else {
         return Ok(());
     };
@@ -724,16 +734,20 @@ async fn iouring_backend_recovery_replays_across_multiple_chunks() -> RS<()> {
         chunk_count
     );
 
+    let Some(restart_listener) = reserve_listener() else {
+        return Ok(());
+    };
+    let restart_port = restart_listener.local_addr().unwrap().port();
     let (stop_notifier, server_thread) = spawn_iouring_server(
-        bind_reserved_listener(port).unwrap(),
+        restart_listener,
         worker_count,
         &data_dir,
         log_chunk_size,
         None,
     );
-    wait_until_server_ready_or_exit_async(port, &server_thread).await?;
+    wait_until_server_ready_or_exit_async(restart_port, &server_thread).await?;
     {
-        let mut client = AsyncPerfClient::connect(port).await?;
+        let mut client = AsyncPerfClient::connect(restart_port).await?;
         for (key, value) in &entries {
             assert_eq!(client.get(key.clone()).await?, Some(value.clone()));
         }
@@ -746,7 +760,7 @@ async fn iouring_backend_recovery_replays_across_multiple_chunks() -> RS<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iouring_backend_open_session_routes_connection_to_requested_partition() -> RS<()> {
-    let _guard = network_perf_test_lock().lock().unwrap();
+    let _guard = lock_network_perf_test();
     let Some(listener) = reserve_listener() else {
         return Ok(());
     };
@@ -823,7 +837,7 @@ async fn iouring_backend_open_session_routes_connection_to_requested_partition()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iouring_backend_open_session_rebind_keeps_same_session_id() -> RS<()> {
-    let _guard = network_perf_test_lock().lock().unwrap();
+    let _guard = lock_network_perf_test();
     let Some(listener) = reserve_listener() else {
         return Ok(());
     };

@@ -5,12 +5,12 @@ pub mod _test {
     use mudu_utils::log::log_setup;
     use std::fs;
     use std::path::PathBuf;
-    use tracing::info;
+    use tracing::debug;
 
     pub fn _test_target(name: &str) {
         log_setup("info");
         __test_target(name);
-        info!("{} test success", name);
+        debug!("{} test success", name);
     }
 
     fn __test_target(name: &str) {

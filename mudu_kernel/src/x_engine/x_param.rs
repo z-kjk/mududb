@@ -53,8 +53,7 @@ pub struct PDropTable {
 pub struct PInsertKeyValue {
     pub tx_mgr: Arc<dyn TxMgr>,
     pub table_id: OID,
-    pub key: VecDatum,
-    pub value: VecDatum,
+    pub rows: Vec<(VecDatum, VecDatum)>,
 }
 
 #[derive(Clone)]

@@ -1,8 +1,14 @@
+use crate::codec::adapter;
+use crate::universal::uni_error::UniError;
 use crate::universal::uni_session_open_argv::UniSessionOpenArgv;
 use mudu::common::endian::{read_u128, write_u128};
 use mudu::common::id::OID;
 use mudu::common::result::RS;
+use mudu::common::serde_utils::{deserialize_from, serialize_to_vec};
+use mudu::error::err::MError;
 use std::mem::size_of;
+
+const ERROR_MAGIC: &[u8; 4] = b"MERR";
 
 fn write_u32_be(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
@@ -32,6 +38,22 @@ fn read_bytes(input: &[u8], offset: &mut usize, len: usize) -> RS<Vec<u8>> {
     let bytes = input[*offset..end].to_vec();
     *offset = end;
     Ok(bytes)
+}
+
+fn decode_error_result(input: &[u8]) -> RS<()> {
+    if input.len() < ERROR_MAGIC.len() || &input[..ERROR_MAGIC.len()] != ERROR_MAGIC {
+        return Ok(());
+    }
+    let (error, _) = deserialize_from::<UniError>(&input[ERROR_MAGIC.len()..])?;
+    Err(adapter::error_from_mu(error))
+}
+
+pub fn serialize_error_result(error: MError) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(ERROR_MAGIC);
+    let encoded_error = serialize_to_vec(&adapter::error_to_mu(error)).unwrap_or_default();
+    output.extend_from_slice(&encoded_error);
+    output
 }
 
 pub fn serialize_get_param(key: &[u8]) -> Vec<u8> {
@@ -81,6 +103,7 @@ pub fn serialize_get_result(value: Option<&[u8]>) -> Vec<u8> {
 }
 
 pub fn deserialize_get_result(input: &[u8]) -> RS<Option<Vec<u8>>> {
+    decode_error_result(input)?;
     if input.is_empty() {
         return Err(mudu::m_error!(
             mudu::error::ec::EC::DecodeErr,
@@ -145,6 +168,7 @@ pub fn serialize_put_result() -> Vec<u8> {
 }
 
 pub fn deserialize_put_result(input: &[u8]) -> RS<()> {
+    decode_error_result(input)?;
     if input == [1] {
         Ok(())
     } else {
@@ -224,8 +248,7 @@ pub fn serialize_open_param() -> Vec<u8> {
 }
 
 pub fn serialize_open_argv_param(argv: &UniSessionOpenArgv) -> Vec<u8> {
-    mudu::common::serde_utils::serialize_to_vec(argv)
-        .unwrap_or_else(|e| panic!("serialize open argv error: {}", e))
+    mudu::common::serde_utils::serialize_to_vec(argv).unwrap_or_default()
 }
 
 pub fn deserialize_open_param(input: &[u8]) -> RS<UniSessionOpenArgv> {
@@ -243,6 +266,7 @@ pub fn serialize_open_result(session_id: OID) -> Vec<u8> {
 }
 
 pub fn deserialize_open_result(input: &[u8]) -> RS<OID> {
+    decode_error_result(input)?;
     if input.len() < size_of::<u128>() {
         return Err(mudu::m_error!(
             mudu::error::ec::EC::DecodeErr,
@@ -289,6 +313,7 @@ pub fn serialize_range_result(items: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
 }
 
 pub fn deserialize_range_result(input: &[u8]) -> RS<Vec<(Vec<u8>, Vec<u8>)>> {
+    decode_error_result(input)?;
     let mut offset = 0;
     let count = read_u32_be(input, &mut offset)? as usize;
     let mut items = Vec::with_capacity(count);
@@ -300,4 +325,26 @@ pub fn deserialize_range_result(input: &[u8]) -> RS<Vec<(Vec<u8>, Vec<u8>)>> {
         items.push((key, value));
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mudu::error::ec::EC;
+
+    #[test]
+    fn deserialize_get_result_returns_structured_error() {
+        let payload = serialize_error_result(mudu::m_error!(EC::ParseErr, "bad get"));
+        let err = deserialize_get_result(&payload).unwrap_err();
+        assert_eq!(err.ec(), EC::ParseErr);
+        assert_eq!(err.message(), "bad get");
+    }
+
+    #[test]
+    fn deserialize_open_result_returns_structured_error() {
+        let payload = serialize_error_result(mudu::m_error!(EC::NoSuchElement, "missing session"));
+        let err = deserialize_open_result(&payload).unwrap_err();
+        assert_eq!(err.ec(), EC::NoSuchElement);
+        assert_eq!(err.message(), "missing session");
+    }
 }

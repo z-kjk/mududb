@@ -3,6 +3,8 @@ use crate::tuple::datum_desc::DatumDesc;
 use crate::tuple::enumerable_datum::EnumerableDatum;
 use crate::tuple::tuple_field_desc::TupleFieldDesc;
 use mudu::common::result::RS;
+use mudu::error::ec::EC;
+use mudu::m_error;
 use mudu_type::dat_type::DatType;
 use mudu_type::dat_value::DatValue;
 use mudu_type::datum::Datum;
@@ -70,13 +72,24 @@ fn build_tuple_desc(field_name: &[String], field_ty: Vec<DatType>) -> TupleField
     to_tuple_desc(fields)
 }
 
+macro_rules! count_types {
+    () => (0usize);
+    ($head:ident $(,$tail:ident)*) => (1usize + count_types!($($tail),*));
+}
+
 impl<T> EnumerableDatum for T
 where
     T: Datum + TupleDatumMarker,
 {
     fn to_value(&self, datum_desc: &[DatumDesc]) -> RS<Vec<DatValue>> {
         if datum_desc.len() != 1 {
-            panic!("single type expects exactly 1 DatumDesc");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "single value expects 1 datum desc, got {}",
+                    datum_desc.len()
+                )
+            ));
         }
         let value = datum_to_value(self, &datum_desc[0])?;
         Ok(vec![value])
@@ -84,7 +97,10 @@ where
 
     fn to_binary(&self, desc: &[DatumDesc]) -> RS<Vec<Vec<u8>>> {
         if desc.len() != 1 {
-            panic!("single type expects exactly one DatumDesc");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!("single value expects 1 datum desc, got {}", desc.len())
+            ));
         }
         let binary = datum_to_binary(self, &desc[0])?;
         Ok(vec![binary])
@@ -126,14 +142,28 @@ where
 {
     fn from_value(vec_value: &Vec<DatValue>, desc: &[DatumDesc]) -> RS<Self> {
         if vec_value.len() != 1 || desc.len() != 1 {
-            panic!("single type expects exactly one value and one DatumDesc");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "single value expects one value and one desc, got value={}, desc={}",
+                    vec_value.len(),
+                    desc.len()
+                )
+            ));
         }
         datum_from_value::<T>(&vec_value[0])
     }
 
     fn from_binary(vec_bin: &Vec<Vec<u8>>, desc: &[DatumDesc]) -> RS<T> {
         if vec_bin.len() != 1 || desc.len() != 1 {
-            panic!("single type expects exactly one binary and one DatumDesc");
+            return Err(m_error!(
+                EC::ParseErr,
+                format!(
+                    "single value expects one binary and one desc, got binary={}, desc={}",
+                    vec_bin.len(),
+                    desc.len()
+                )
+            ));
         }
         datum_from_binary::<T>(&vec_bin[0], &desc[0])
     }
@@ -188,6 +218,17 @@ macro_rules! impl_rs_tuple_datum {
             #[allow(non_snake_case)]
             #[allow(unused_assignments)]
             fn to_value(&self, datum_desc: &[DatumDesc]) -> RS<Vec<DatValue>> {
+                let expected = count_types!($($T),*);
+                if datum_desc.len() != expected {
+                    return Err(m_error!(
+                        EC::ParseErr,
+                        format!(
+                            "tuple value expects {} datum desc, got {}",
+                            expected,
+                            datum_desc.len()
+                        )
+                    ));
+                }
                 let mut vec = Vec::new();
                 let ($(ref $T,)*) = *self;
                 let mut idx = 0;
@@ -202,8 +243,16 @@ macro_rules! impl_rs_tuple_datum {
             #[allow(non_snake_case)]
             #[allow(unused_assignments)]
             fn to_binary(&self, desc: &[DatumDesc]) -> RS<Vec<Vec<u8>>> {
-                if desc.len() < 1 {
-                    panic!("tuple size error");
+                let expected = count_types!($($T),*);
+                if desc.len() != expected {
+                    return Err(m_error!(
+                        EC::ParseErr,
+                        format!(
+                            "tuple value expects {} datum desc, got {}",
+                            expected,
+                            desc.len()
+                        )
+                    ));
                 }
                 let mut vec_binary = Vec::new();
                 let ($(ref $T,)*) = *self;
@@ -224,8 +273,17 @@ macro_rules! impl_rs_tuple_datum {
             #[allow(non_snake_case)]
             #[allow(unused_assignments)]
             fn from_value(vec_value: &Vec<DatValue>, desc: &[DatumDesc]) -> RS<($($T,)*)> {
-                if vec_value.len() != desc.len() {
-                    panic!("tuple size error");
+                let expected = count_types!($($T),*);
+                if vec_value.len() != expected || desc.len() != expected {
+                    return Err(m_error!(
+                        EC::ParseErr,
+                        format!(
+                            "tuple value expects {} values and desc, got value={}, desc={}",
+                            expected,
+                            vec_value.len(),
+                            desc.len()
+                        )
+                    ));
                 }
                 let mut idx = 0;
                 $(
@@ -238,8 +296,17 @@ macro_rules! impl_rs_tuple_datum {
             #[allow(non_snake_case)]
             #[allow(unused_assignments)]
             fn from_binary(vec_bin: &Vec<Vec<u8>>, desc: &[DatumDesc]) -> RS<($($T,)*)> {
-                if vec_bin.len() != desc.len() {
-                    panic!("tuple size error");
+                let expected = count_types!($($T),*);
+                if vec_bin.len() != expected || desc.len() != expected {
+                    return Err(m_error!(
+                        EC::ParseErr,
+                        format!(
+                            "tuple value expects {} binaries and desc, got binary={}, desc={}",
+                            expected,
+                            vec_bin.len(),
+                            desc.len()
+                        )
+                    ));
                 }
                 let mut idx = 0;
                 $(

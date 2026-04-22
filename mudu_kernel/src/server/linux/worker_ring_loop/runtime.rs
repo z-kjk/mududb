@@ -1,5 +1,4 @@
 use super::*;
-
 impl WorkerRingLoop {
     /// Main poll/submit loop for the worker.
     ///

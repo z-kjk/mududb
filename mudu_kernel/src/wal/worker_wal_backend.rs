@@ -1,8 +1,6 @@
 use crate::io::file::{self, IoFile};
 use crate::io::worker_ring;
-use crate::wal::log_frame::{
-    frame_len, frame_lsns, last_frame_lsn, serialize_entry, LogFrameHeader,
-};
+use crate::wal::log_frame::{frame_len, frame_lsns, last_frame_lsn, serialize_entry};
 use crate::wal::lsn::LSN;
 use crate::wal::worker_log::WorkerLogBackend;
 use async_trait::async_trait;
@@ -843,8 +841,9 @@ impl WorkerLogLayout {
             while offset < bytes.len() {
                 let remaining = &bytes[offset..];
                 let next_frame_len = frame_len(remaining)?;
-                let header = LogFrameHeader::decode(&remaining[..16])?;
-                max_lsn = Some(max_lsn.map_or(header.lsn(), |current| current.max(header.lsn())));
+                let frame = &remaining[..next_frame_len];
+                let lsn = crate::wal::log_frame::frame_lsn(frame)?;
+                max_lsn = Some(max_lsn.map_or(lsn, |current| current.max(lsn)));
                 offset += next_frame_len;
             }
         }
@@ -1066,22 +1065,20 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     fn sample_batch() -> XLBatch {
-        XLBatch {
-            entries: vec![XLEntry {
-                xid: 1,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Insert(XLInsert {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"k1".to_vec(),
-                        value: b"v1".to_vec(),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        }
+        XLBatch::new(vec![XLEntry {
+            xid: 1,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"k1".to_vec(),
+                    value: b"v1".to_vec(),
+                }),
+                TxOp::Commit,
+            ],
+        }])
     }
 
     #[test]
@@ -1116,22 +1113,20 @@ mod tests {
     #[test]
     fn worker_log_decodes_multiple_frames_from_single_chunk_payload() {
         let first = sample_batch();
-        let second = XLBatch {
-            entries: vec![XLEntry {
-                xid: 2,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Insert(XLInsert {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"k2".to_vec(),
-                        value: b"v2".to_vec(),
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        };
+        let second = XLBatch::new(vec![XLEntry {
+            xid: 2,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"k2".to_vec(),
+                    value: b"v2".to_vec(),
+                }),
+                TxOp::Commit,
+            ],
+        }]);
         let mut bytes = Vec::new();
         let next_lsn = AtomicU32::new(0);
         bytes.extend(
@@ -1198,22 +1193,20 @@ mod tests {
     }
 
     fn sample_xl_batch_1() -> XLBatch {
-        XLBatch {
-            entries: vec![XLEntry {
-                xid: 1,
-                ops: vec![
-                    TxOp::Begin,
-                    TxOp::Insert(XLInsert {
-                        table_id: 0,
-                        partition_id: 0,
-                        tuple_id: 0,
-                        key: b"k".to_vec(),
-                        value: vec![9u8; 512],
-                    }),
-                    TxOp::Commit,
-                ],
-            }],
-        }
+        XLBatch::new(vec![XLEntry {
+            xid: 1,
+            ops: vec![
+                TxOp::Begin,
+                TxOp::Insert(XLInsert {
+                    table_id: 0,
+                    partition_id: 0,
+                    tuple_id: 0,
+                    key: b"k".to_vec(),
+                    value: vec![9u8; 512],
+                }),
+                TxOp::Commit,
+            ],
+        }])
     }
     #[test]
     fn worker_log_serializes_frame_headers_with_monotonic_lsn() {

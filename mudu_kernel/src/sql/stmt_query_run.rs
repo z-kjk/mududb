@@ -71,23 +71,24 @@ fn to_pg_field_info(rd: &ProjList, format: &Format) -> RS<Vec<FieldInfo>> {
                 desc.name().clone(),
                 None,
                 None,
-                dt_id_to_pg_type(desc.type_desc().dat_type_id()),
+                dt_id_to_pg_type(desc.type_desc().dat_type_id())?,
                 format.format_for(index),
             ))
         })
         .collect()
 }
 
-fn dt_id_to_pg_type(dt: TypeID) -> PGDataType {
+fn dt_id_to_pg_type(dt: TypeID) -> RS<PGDataType> {
     match dt {
-        TypeID::I32 => PGDataType::INT4,
-        TypeID::I64 => PGDataType::INT8,
-        TypeID::F32 => PGDataType::FLOAT4,
-        TypeID::F64 => PGDataType::FLOAT8,
-        TypeID::String => PGDataType::TEXT,
-        _ => {
-            panic!("unsupported type {:?}", dt);
-        }
+        TypeID::I32 => Ok(PGDataType::INT4),
+        TypeID::I64 => Ok(PGDataType::INT8),
+        TypeID::F32 => Ok(PGDataType::FLOAT4),
+        TypeID::F64 => Ok(PGDataType::FLOAT8),
+        TypeID::String => Ok(PGDataType::TEXT),
+        _ => Err(m_error!(
+            ER::TypeErr,
+            format!("unsupported projection type for pgwire: {:?}", dt)
+        )),
     }
 }
 
@@ -121,7 +122,12 @@ async fn encode_pg_wire_row_data(
                     DatTypeID::F64 => encoder.encode_field(&internal.to_f64()),
                     DatTypeID::String => encoder.encode_field(internal.expect_string()),
                     _ => {
-                        panic!("unsupported type {:?}", dat_type_id);
+                        has_err = true;
+                        results.push(Err(PgWireError::ApiError(Box::new(m_error!(
+                            ER::TypeErr,
+                            format!("unsupported row type for pgwire encode: {:?}", dat_type_id)
+                        )))));
+                        break;
                     }
                 };
                 if let Err(e) = r {

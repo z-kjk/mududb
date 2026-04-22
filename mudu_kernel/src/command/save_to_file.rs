@@ -1,11 +1,10 @@
 use crate::contract::cmd_exec::CmdExec;
 use crate::contract::meta_mgr::MetaMgr;
 use crate::contract::table_desc::TableDesc;
+use crate::io::file;
 use crate::x_engine::api::{OptRead, Predicate, RangeData, VecSelTerm, XContract};
 use crate::x_engine::tx_mgr::TxMgr;
-use async_std::fs::File;
 use async_trait::async_trait;
-use csv_async::AsyncWriter;
 use mudu::common::id::OID;
 use mudu::common::result::RS;
 use mudu::error::ec::EC as ER;
@@ -123,18 +122,11 @@ impl _SaveToFile {
             )
             .await?;
 
-        let file = File::create(self.file_path.clone()).await.map_err(|e| {
-            m_error!(
-                ER::IOErr,
-                format!(
-                    "save failed, create csv file {} error, {}",
-                    self.file_path, e
-                )
-            )
-        })?;
-        let mut writer = AsyncWriter::from_writer(file);
+        let mut writer = csv::WriterBuilder::new()
+            .has_headers(false)
+            .from_writer(Vec::new());
         let header = self.reorder_row(&Self::build_header(&table_desc))?;
-        writer.write_record(header).await.map_err(|e| {
+        writer.write_record(header).map_err(|e| {
             m_error!(
                 ER::IOErr,
                 format!(
@@ -148,7 +140,7 @@ impl _SaveToFile {
         while let Some(row) = cursor.next().await? {
             let textual = row.to_textual(&output_desc)?;
             let ordered = self.reorder_row(&textual)?;
-            writer.write_record(ordered).await.map_err(|e| {
+            writer.write_record(ordered).map_err(|e| {
                 m_error!(
                     ER::IOErr,
                     format!("save failed, write csv row {} error, {}", self.file_path, e)
@@ -156,11 +148,79 @@ impl _SaveToFile {
             })?;
             rows += 1;
         }
-        writer.flush().await.map_err(|e| {
+        writer.flush().map_err(|e| {
             m_error!(
                 ER::IOErr,
                 format!(
                     "save failed, flush csv file {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+
+        let payload = writer.into_inner().map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, finalize csv writer {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+
+        let file = file::open(
+            &self.file_path,
+            libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY | file::cloexec_flag(),
+            0o644,
+        )
+        .await
+        .map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, create csv file {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+        let mut offset = 0usize;
+        while offset < payload.len() {
+            let written = file::write(&file, payload[offset..].to_vec(), offset as u64)
+                .await
+                .map_err(|e| {
+                    m_error!(
+                        ER::IOErr,
+                        format!(
+                            "save failed, write csv file {} error, {}",
+                            self.file_path, e
+                        )
+                    )
+                })?;
+            if written == 0 {
+                return Err(m_error!(
+                    ER::IOErr,
+                    format!(
+                        "save failed, write csv file {} wrote zero bytes",
+                        self.file_path
+                    )
+                ));
+            }
+            offset += written;
+        }
+        file::flush(&file).await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, flush csv file {} error, {}",
+                    self.file_path, e
+                )
+            )
+        })?;
+        file::close(file).await.map_err(|e| {
+            m_error!(
+                ER::IOErr,
+                format!(
+                    "save failed, close csv file {} error, {}",
                     self.file_path, e
                 )
             )

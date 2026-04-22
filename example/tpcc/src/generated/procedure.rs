@@ -95,7 +95,9 @@ pub async fn tpcc_seed(
         for district_id in 1..=district_count {
             mudu_command(
                 xid,
-                sql_stmt!(&"INSERT INTO district (d_id, d_w_id, d_name, d_tax, d_ytd, d_next_o_id, d_last_delivery_o_id) VALUES (?, ?, ?, ?, 0, 1, 0)"),
+                sql_stmt!(
+                    &"INSERT INTO district (d_id, d_w_id, d_name, d_tax, d_ytd, d_next_o_id, d_last_delivery_o_id) VALUES (?, ?, ?, ?, 0, 1, 0)"
+                ),
                 sql_params!(&(
                     district_id,
                     warehouse_id,
@@ -107,7 +109,9 @@ pub async fn tpcc_seed(
                 let (first, last) = customer_name(warehouse_id, district_id, customer_id);
                 mudu_command(
                     xid,
-                    sql_stmt!(&"INSERT INTO customer (c_id, c_d_id, c_w_id, c_first, c_last, c_discount, c_credit, c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_last_order_id) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0)"),
+                    sql_stmt!(
+                        &"INSERT INTO customer (c_id, c_d_id, c_w_id, c_first, c_last, c_discount, c_credit, c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_last_order_id) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0)"
+                    ),
                     sql_params!(&(
                         customer_id,
                         district_id,
@@ -125,7 +129,9 @@ pub async fn tpcc_seed(
         for item_id in 1..=item_count {
             mudu_command(
                 xid,
-                sql_stmt!(&"INSERT INTO stock (s_i_id, s_w_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt) VALUES (?, ?, ?, 0, 0, 0)"),
+                sql_stmt!(
+                    &"INSERT INTO stock (s_i_id, s_w_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt) VALUES (?, ?, ?, 0, 0, 0)"
+                ),
                 sql_params!(&(item_id, warehouse_id, initial_stock)),
             ).await?;
         }
@@ -172,7 +178,9 @@ pub async fn tpcc_new_order(
 
     mudu_command(
         xid,
-        sql_stmt!(&"INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local, o_status) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)"),
+        sql_stmt!(
+            &"INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local, o_status) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)"
+        ),
         sql_params!(&(
             next_order_id,
             district_id,
@@ -224,7 +232,9 @@ pub async fn tpcc_new_order(
 
         mudu_command(
             xid,
-            sql_stmt!(&"UPDATE stock SET s_quantity = ?, s_ytd = ?, s_order_cnt = ?, s_remote_cnt = ? WHERE s_w_id = ? AND s_i_id = ?"),
+            sql_stmt!(
+                &"UPDATE stock SET s_quantity = ?, s_ytd = ?, s_order_cnt = ?, s_remote_cnt = ? WHERE s_w_id = ? AND s_i_id = ?"
+            ),
             sql_params!(&(
                 adjusted_quantity,
                 next_stock_ytd,
@@ -236,7 +246,9 @@ pub async fn tpcc_new_order(
         ).await?;
         mudu_command(
             xid,
-            sql_stmt!(&"INSERT INTO order_line (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_delivery_d, ol_quantity, ol_amount) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)"),
+            sql_stmt!(
+                &"INSERT INTO order_line (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_delivery_d, ol_quantity, ol_amount) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)"
+            ),
             sql_params!(&(
                 next_order_id,
                 district_id,
@@ -253,7 +265,9 @@ pub async fn tpcc_new_order(
     }
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE customer SET c_last_order_id = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"),
+        sql_stmt!(
+            &"UPDATE customer SET c_last_order_id = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"
+        ),
         sql_params!(&(next_order_id, warehouse_id, district_id, customer_id)),
     ).await?;
 
@@ -315,7 +329,9 @@ pub async fn tpcc_payment(
     ).await?;
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE customer SET c_balance = ?, c_ytd_payment = ?, c_payment_cnt = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"),
+        sql_stmt!(
+            &"UPDATE customer SET c_balance = ?, c_ytd_payment = ?, c_payment_cnt = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"
+        ),
         sql_params!(&(
             next_c_balance,
             next_c_ytd_payment,
@@ -327,7 +343,9 @@ pub async fn tpcc_payment(
     ).await?;
     mudu_command(
         xid,
-        sql_stmt!(&"INSERT INTO history (h_id, h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_amount, h_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+        sql_stmt!(
+            &"INSERT INTO history (h_id, h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_amount, h_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
         sql_params!(&(
             mudu_sys::random::next_uuid_v4_string(),
             customer_id,
@@ -367,12 +385,7 @@ pub async fn tpcc_order_status(
 }
 
 /**mudu-proc**/
-pub async fn tpcc_delivery(
-    xid: XID,
-    warehouse_id: i32,
-    district_id: i32,
-    carrier_id: i32,
-) -> RS<String> {
+pub async fn tpcc_delivery(xid: XID, warehouse_id: i32, district_id: i32, carrier_id: i32) -> RS<String> {
     require_positive("warehouse_id", warehouse_id)?;
     require_positive("district_id", district_id)?;
     require_positive("carrier_id", carrier_id)?;
@@ -398,8 +411,16 @@ pub async fn tpcc_delivery(
     ).await?;
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE orders SET o_carrier_id = ?, o_status = ? WHERE o_w_id = ? AND o_d_id = ? AND o_id = ?"),
-        sql_params!(&(carrier_id, "DELIVERED".to_string(), warehouse_id, district_id, order_id)),
+        sql_stmt!(
+            &"UPDATE orders SET o_carrier_id = ?, o_status = ? WHERE o_w_id = ? AND o_d_id = ? AND o_id = ?"
+        ),
+        sql_params!(&(
+            carrier_id,
+            "DELIVERED".to_string(),
+            warehouse_id,
+            district_id,
+            order_id
+        )),
     ).await?;
     let order = query_one_entity::<Orders>(
         xid,
@@ -416,19 +437,16 @@ pub async fn tpcc_delivery(
         required_i32(customer.get_c_delivery_cnt(), "customer.c_delivery_cnt")? + 1;
     mudu_command(
         xid,
-        sql_stmt!(&"UPDATE customer SET c_delivery_cnt = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"),
+        sql_stmt!(
+            &"UPDATE customer SET c_delivery_cnt = ? WHERE c_w_id = ? AND c_d_id = ? AND c_id = ?"
+        ),
         sql_params!(&(next_delivery_cnt, warehouse_id, district_id, customer_id)),
     ).await?;
     Ok(format!("delivered order={order_id} carrier={carrier_id}"))
 }
 
 /**mudu-proc**/
-pub async fn tpcc_stock_level(
-    xid: XID,
-    warehouse_id: i32,
-    district_id: i32,
-    threshold: i32,
-) -> RS<i32> {
+pub async fn tpcc_stock_level(xid: XID, warehouse_id: i32, district_id: i32, threshold: i32) -> RS<i32> {
     require_positive("warehouse_id", warehouse_id)?;
     require_positive("district_id", district_id)?;
     require_positive("threshold", threshold)?;
@@ -442,8 +460,7 @@ pub async fn tpcc_stock_level(
 #[cfg(test)]
 mod tests {
     use super::{
-        tpcc_delivery, tpcc_new_order, tpcc_order_status, tpcc_payment, tpcc_seed,
-        tpcc_stock_level,
+        tpcc_delivery, tpcc_new_order, tpcc_order_status, tpcc_payment, tpcc_seed, tpcc_stock_level,
     };
     use crate::test_lock;
     use mudu_contract::{sql_params, sql_stmt};
@@ -477,8 +494,8 @@ mod tests {
         init_schema(xid);
         tpcc_seed(xid, 1, 2, 4, 5, 20).await.unwrap();
 
-        let order = tpcc_new_order(xid, 1, 1, 1, vec![2, 4, 5], vec![1, 1, 1], vec![3, 2, 1]).await
-            .unwrap();
+        let order =
+            tpcc_new_order(xid, 1, 1, 1, vec![2, 4, 5], vec![1, 1, 1], vec![3, 2, 1]).await.unwrap();
         assert!(order.contains("order=1"));
         assert!(order.contains("lines=3"));
         assert!(order.contains("qty=6"));
@@ -493,20 +510,20 @@ mod tests {
         mudu_close(xid).await.unwrap();
     }
 }
-async fn mp2_tpcc_stock_level(param:Vec<u8>) -> Vec<u8> {
+async fn mp2_tpcc_order_status(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
         param,
-        mudu_inner_p2_tpcc_stock_level,
+        mudu_inner_p2_tpcc_order_status,
     ).await
 }
 
-pub async fn mudu_inner_p2_tpcc_stock_level(
+pub async fn mudu_inner_p2_tpcc_order_status(
     param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
 ) -> ::mudu::common::result::RS<
     ::mudu_contract::procedure::procedure_result::ProcedureResult,
 > {
-    let return_desc = mudu_result_desc_tpcc_stock_level().clone();
-    let res = tpcc_stock_level(
+    let return_desc = mudu_result_desc_tpcc_order_status().clone();
+    let res = tpcc_order_status(
         param.session_id(),
         
             
@@ -537,7 +554,7 @@ pub async fn mudu_inner_p2_tpcc_stock_level(
                 
                 vec![
                     
-                    ::mudu_type::datum::value_from_typed(&tuple, "i32")?
+                    ::mudu_type::datum::value_from_typed(&tuple, "String")?
                     
                 ]
                 
@@ -548,7 +565,7 @@ pub async fn mudu_inner_p2_tpcc_stock_level(
     }
 }
 
-pub fn mudu_argv_desc_tpcc_stock_level()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+pub fn mudu_argv_desc_tpcc_order_status()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
     static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
         std::sync::OnceLock::new();
     ARGV_DESC.get_or_init(||
@@ -570,7 +587,7 @@ pub fn mudu_argv_desc_tpcc_stock_level()  -> &'static ::mudu_contract::tuple::tu
                 ),
                 
                 ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "threshold".to_string(),
+                    "customer_id".to_string(),
                     
                     <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
                     
@@ -581,7 +598,7 @@ pub fn mudu_argv_desc_tpcc_stock_level()  -> &'static ::mudu_contract::tuple::tu
     )
 }
 
-pub fn mudu_result_desc_tpcc_stock_level() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+pub fn mudu_result_desc_tpcc_order_status() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
     static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
         std::sync::OnceLock::new();
     RESULT_DESC.get_or_init(||
@@ -591,7 +608,7 @@ pub fn mudu_result_desc_tpcc_stock_level() -> &'static ::mudu_contract::tuple::t
                 ::mudu_contract::tuple::datum_desc::DatumDesc::new(
                     "0".to_string(),
                     
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
                     
                 ),
                 
@@ -600,7 +617,7 @@ pub fn mudu_result_desc_tpcc_stock_level() -> &'static ::mudu_contract::tuple::t
     )
 }
 
-pub fn mudu_proc_desc_tpcc_stock_level()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+pub fn mudu_proc_desc_tpcc_order_status()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
     static _PROC_DESC: std::sync::OnceLock<
         ::mudu_contract::procedure::proc_desc::ProcDesc,
     > = std::sync::OnceLock::new();
@@ -608,20 +625,20 @@ pub fn mudu_proc_desc_tpcc_stock_level()  -> &'static ::mudu_contract::procedure
         .get_or_init(|| {
             ::mudu_contract::procedure::proc_desc::ProcDesc::new(
                 "tpcc".to_string(),
-                "tpcc_stock_level".to_string(),
-                mudu_argv_desc_tpcc_stock_level().clone(),
-                mudu_result_desc_tpcc_stock_level().clone(),
+                "tpcc_order_status".to_string(),
+                mudu_argv_desc_tpcc_order_status().clone(),
+                mudu_result_desc_tpcc_order_status().clone(),
                 false
             )
         })
 }
 
-mod mod_tpcc_stock_level {
+mod mod_tpcc_order_status {
     wit_bindgen::generate!({
         inline:
-        r##"package mudu:mp2-tpcc-stock-level;
-            world mudu-app-mp2-tpcc-stock-level {
-                export mp2-tpcc-stock-level: func(param:list<u8>) -> list<u8>;
+        r##"package mudu:mp2-tpcc-order-status;
+            world mudu-app-mp2-tpcc-order-status {
+                export mp2-tpcc-order-status: func(param:list<u8>) -> list<u8>;
             }
         "##,
         async: true
@@ -629,15 +646,15 @@ mod mod_tpcc_stock_level {
 
     #[allow(non_camel_case_types)]
     #[allow(unused)]
-    struct GuestTpccStockLevel {}
+    struct GuestTpccOrderStatus {}
 
-    impl Guest for GuestTpccStockLevel {
-        async fn mp2_tpcc_stock_level(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_tpcc_stock_level(param).await
+    impl Guest for GuestTpccOrderStatus {
+        async fn mp2_tpcc_order_status(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_tpcc_order_status(param).await
         }
     }
 
-    export!(GuestTpccStockLevel);
+    export!(GuestTpccOrderStatus);
 }
 async fn mp2_tpcc_payment(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
@@ -798,6 +815,152 @@ mod mod_tpcc_payment {
     }
 
     export!(GuestTpccPayment);
+}
+async fn mp2_tpcc_stock_level(param:Vec<u8>) -> Vec<u8> {
+    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
+        param,
+        mudu_inner_p2_tpcc_stock_level,
+    ).await
+}
+
+pub async fn mudu_inner_p2_tpcc_stock_level(
+    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
+) -> ::mudu::common::result::RS<
+    ::mudu_contract::procedure::procedure_result::ProcedureResult,
+> {
+    let return_desc = mudu_result_desc_tpcc_stock_level().clone();
+    let res = tpcc_stock_level(
+        param.session_id(),
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[0], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[1], "i32")?,
+            
+        
+            
+            ::mudu_type::datum::value_to_typed::<
+                i32,
+                _,
+            >(&param.param_list()[2], "i32")?,
+            
+        
+    ).await;
+    match res {
+        Ok(tuple) => {
+            let return_list = {
+                
+                vec![
+                    
+                    ::mudu_type::datum::value_from_typed(&tuple, "i32")?
+                    
+                ]
+                
+            };
+            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn mudu_argv_desc_tpcc_stock_level()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    ARGV_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "warehouse_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "district_id".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "threshold".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_result_desc_tpcc_stock_level() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
+    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
+        std::sync::OnceLock::new();
+    RESULT_DESC.get_or_init(||
+        {
+            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
+                
+                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
+                    "0".to_string(),
+                    
+                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
+                    
+                ),
+                
+            ])
+        }
+    )
+}
+
+pub fn mudu_proc_desc_tpcc_stock_level()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
+    static _PROC_DESC: std::sync::OnceLock<
+        ::mudu_contract::procedure::proc_desc::ProcDesc,
+    > = std::sync::OnceLock::new();
+    _PROC_DESC
+        .get_or_init(|| {
+            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
+                "tpcc".to_string(),
+                "tpcc_stock_level".to_string(),
+                mudu_argv_desc_tpcc_stock_level().clone(),
+                mudu_result_desc_tpcc_stock_level().clone(),
+                false
+            )
+        })
+}
+
+mod mod_tpcc_stock_level {
+    wit_bindgen::generate!({
+        inline:
+        r##"package mudu:mp2-tpcc-stock-level;
+            world mudu-app-mp2-tpcc-stock-level {
+                export mp2-tpcc-stock-level: func(param:list<u8>) -> list<u8>;
+            }
+        "##,
+        async: true
+    });
+
+    #[allow(non_camel_case_types)]
+    #[allow(unused)]
+    struct GuestTpccStockLevel {}
+
+    impl Guest for GuestTpccStockLevel {
+        async fn mp2_tpcc_stock_level(param:Vec<u8>) -> Vec<u8> {
+            super::mp2_tpcc_stock_level(param).await
+        }
+    }
+
+    export!(GuestTpccStockLevel);
 }
 async fn mp2_tpcc_new_order(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
@@ -986,152 +1149,6 @@ mod mod_tpcc_new_order {
     }
 
     export!(GuestTpccNewOrder);
-}
-async fn mp2_tpcc_order_status(param:Vec<u8>) -> Vec<u8> {
-    ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
-        param,
-        mudu_inner_p2_tpcc_order_status,
-    ).await
-}
-
-pub async fn mudu_inner_p2_tpcc_order_status(
-    param: ::mudu_contract::procedure::procedure_param::ProcedureParam,
-) -> ::mudu::common::result::RS<
-    ::mudu_contract::procedure::procedure_result::ProcedureResult,
-> {
-    let return_desc = mudu_result_desc_tpcc_order_status().clone();
-    let res = tpcc_order_status(
-        param.session_id(),
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[0], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[1], "i32")?,
-            
-        
-            
-            ::mudu_type::datum::value_to_typed::<
-                i32,
-                _,
-            >(&param.param_list()[2], "i32")?,
-            
-        
-    ).await;
-    match res {
-        Ok(tuple) => {
-            let return_list = {
-                
-                vec![
-                    
-                    ::mudu_type::datum::value_from_typed(&tuple, "String")?
-                    
-                ]
-                
-            };
-            Ok(::mudu_contract::procedure::procedure_result::ProcedureResult::new(return_list))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn mudu_argv_desc_tpcc_order_status()  -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static ARGV_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    ARGV_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "warehouse_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "district_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "customer_id".to_string(),
-                    
-                    <i32 as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_result_desc_tpcc_order_status() -> &'static ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc {
-    static RESULT_DESC: std::sync::OnceLock<::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc> =
-        std::sync::OnceLock::new();
-    RESULT_DESC.get_or_init(||
-        {
-            ::mudu_contract::tuple::tuple_field_desc::TupleFieldDesc::new(vec![
-                
-                ::mudu_contract::tuple::datum_desc::DatumDesc::new(
-                    "0".to_string(),
-                    
-                    <String as ::mudu_type::datum::Datum>::dat_type().clone()
-                    
-                ),
-                
-            ])
-        }
-    )
-}
-
-pub fn mudu_proc_desc_tpcc_order_status()  -> &'static ::mudu_contract::procedure::proc_desc::ProcDesc {
-    static _PROC_DESC: std::sync::OnceLock<
-        ::mudu_contract::procedure::proc_desc::ProcDesc,
-    > = std::sync::OnceLock::new();
-    _PROC_DESC
-        .get_or_init(|| {
-            ::mudu_contract::procedure::proc_desc::ProcDesc::new(
-                "tpcc".to_string(),
-                "tpcc_order_status".to_string(),
-                mudu_argv_desc_tpcc_order_status().clone(),
-                mudu_result_desc_tpcc_order_status().clone(),
-                false
-            )
-        })
-}
-
-mod mod_tpcc_order_status {
-    wit_bindgen::generate!({
-        inline:
-        r##"package mudu:mp2-tpcc-order-status;
-            world mudu-app-mp2-tpcc-order-status {
-                export mp2-tpcc-order-status: func(param:list<u8>) -> list<u8>;
-            }
-        "##,
-        async: true
-    });
-
-    #[allow(non_camel_case_types)]
-    #[allow(unused)]
-    struct GuestTpccOrderStatus {}
-
-    impl Guest for GuestTpccOrderStatus {
-        async fn mp2_tpcc_order_status(param:Vec<u8>) -> Vec<u8> {
-            super::mp2_tpcc_order_status(param).await
-        }
-    }
-
-    export!(GuestTpccOrderStatus);
 }
 async fn mp2_tpcc_seed(param:Vec<u8>) -> Vec<u8> {
     ::mudu_binding::procedure::procedure_invoke::invoke_procedure_async(
