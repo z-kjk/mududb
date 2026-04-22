@@ -15,3 +15,5 @@ pub const S_ARGUMENT_LIST: &str = "argument_list";
 pub const S_STRING: &str = "string";
 pub const S_ASYNC: &str = "async";
 pub const S_DEF: &str = "def";
+
+pub const S_NONE: &str = "none";

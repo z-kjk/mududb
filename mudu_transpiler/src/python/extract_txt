@@ -1,0 +1,279 @@
+// python_parser.rs的
+#[cfg(test)]
+mod tests_struct {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn build_context(code: &str) -> ParseContext {
+        ParseContext::new(code.to_string())
+    }
+
+    fn parse_ok(code: &str) -> ParseContext {
+        let mut context = build_context(code);
+        let ret = PythonParser::parse(&mut context);
+        assert!(ret.is_ok(), "parse failed: {:?}", ret.err());
+        context
+    }
+
+    ///进入函数解析判定
+    #[test]
+    fn test_marked_function_should_enter_mudu_procedure() {
+        let code = r#"
+#mudu_proc#
+def myFunc3(a: int, b: float, c: str, d: bool) -> tuple[int, str, bool, float]:
+    return a, c, d, b
+"#;
+        let context = parse_ok(code);
+        assert!(context.mudu_procedure.contains_key("myFunc3"));
+    }
+
+    #[test]
+    fn test_unmarked_function_should_not_enter_mudu_procedure() {
+        let code = r#"
+def add(x: int, y: int) -> int:
+    return x + y
+"#;
+        let context = parse_ok(code);
+        assert!(!context.mudu_procedure.contains_key("add"));
+    }
+
+    #[test]
+    fn test_marked_async_function_should_enter_mudu_procedure() {
+        let code = r#"
+#mudu_proc#
+async def fetch(url: str) -> str:
+    return url
+"#;
+        let context = parse_ok(code);
+        assert!(context.mudu_procedure.contains_key("fetch"));
+    }
+
+    #[test]
+    fn test_unmarked_async_function_should_not_enter_mudu_procedure() {
+        let code = r#"
+async def fetch(url: str) -> str:
+    return url
+"#;
+        let context = parse_ok(code);
+        assert!(!context.mudu_procedure.contains_key("fetch"));
+    }
+
+    // 只收集带#mudu_proc#注释的
+    #[test]
+    fn test_only_marked_functions_are_collected() {
+        let code = r#"
+def normal1():
+    pass
+
+#mudu_proc#
+def proc1(a: int) -> int:
+    return a
+
+def normal2():
+    pass
+"#;
+        let context = parse_ok(code);
+
+        assert!(context.mudu_procedure.contains_key("proc1"));
+        assert!(!context.mudu_procedure.contains_key("normal1"));
+        assert!(!context.mudu_procedure.contains_key("normal2"));
+    }
+
+    #[test]
+    fn test_marker_on_previous_line_should_work() {
+        let code = r#"#mudu_proc#
+def proc():
+    return 1
+"#;
+        let context = parse_ok(code);
+
+        println!(
+            "mudu_procedure keys: {:?}",
+            context.mudu_procedure.keys().collect::<Vec<_>>()
+        );
+
+        assert!(context.mudu_procedure.contains_key("proc"));
+    }
+
+    //空格也生效
+    #[test]
+    fn test_marker_with_blank_line_should_work() {
+        let code = r#"#mudu_proc#
+
+def proc():
+    return 1
+"#;
+        let context = parse_ok(code);
+        assert!(context.mudu_procedure.contains_key("proc"));
+    }
+
+    //非解析函数也可以解析
+    #[test]
+    fn test_unmarked_function_parse_should_not_panic() {
+        let code = r#"
+def main():
+    foo()
+"#;
+        let _context = parse_ok(code);
+    }
+
+    ///测试AST结构
+    // name字段得到函数名
+    #[test]
+    fn test_expected_child_field_ok() {
+        let code = r#"
+def add(x: int) -> int:
+    return x
+"#;
+        let mut parser = Parser::new();
+        parser.set_language(&python_language()).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        let mut cursor = root.walk();
+        let func_node = root
+            .children(&mut cursor)
+            .find(|n| n.kind() == ts_const::ts_kind_name::S_FUNCTION_DEFINITION)
+            .unwrap();
+
+        let name_node = expected_child_field(&func_node, ts_const::ts_field_name::NAME);
+        assert!(name_node.is_ok());
+    }
+
+    //没有name字段
+    #[test]
+    fn test_expected_child_field_missing_should_fail() {
+        let code = r#"
+x = 1
+"#;
+        let mut parser = Parser::new();
+        parser.set_language(&python_language()).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        let name_node = expected_child_field(&root, ts_const::ts_field_name::NAME);
+        assert!(name_node.is_err());
+    }
+
+    //有返回类型
+    #[test]
+    fn test_opt_child_field_ok() {
+        let code = r#"
+def add(x: int) -> int:
+    return x
+"#;
+        let mut parser = Parser::new();
+        parser.set_language(&python_language()).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        let mut cursor = root.walk();
+        let func_node = root
+            .children(&mut cursor)
+            .find(|n| n.kind() == ts_const::ts_kind_name::S_FUNCTION_DEFINITION)
+            .unwrap();
+
+        let ret_node = opt_child_field(&func_node, ts_const::ts_field_name::RETURN_TYPE);
+        assert!(ret_node.is_some());
+    }
+
+    //没有返回类型
+    #[test]
+    fn test_opt_child_field_none_when_missing() {
+        let code = r#"
+def add(x):
+    return x
+"#;
+        let mut parser = Parser::new();
+        parser.set_language(&python_language()).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        let mut cursor = root.walk();
+        let func_node = root
+            .children(&mut cursor)
+            .find(|n| n.kind() == ts_const::ts_kind_name::S_FUNCTION_DEFINITION)
+            .unwrap();
+
+        let ret_node = opt_child_field(&func_node, ts_const::ts_field_name::RETURN_TYPE);
+        assert!(ret_node.is_none());
+    }
+
+    ///测试visit_call和walk_node调用->没重复
+    //单层嵌套
+    #[test]
+    fn test_nested_call_duplicate_debug() {
+        let code = r#"
+#mudu_proc#
+def main():
+    foo(bar())
+"#;
+
+        let context = parse_ok(code);
+
+        println!("=== call_dependencies ===");
+        for (callee, callers) in &context.call_dependencies {
+            println!("{} <- {:?}", callee, callers);
+        }
+
+        println!("=== position_call_end ===");
+        for (name, positions) in &context.position_call_end {
+            println!("{} -> {} times", name, positions.len());
+        }
+
+        // bar() 只应该被收集一次
+        let bar_positions = context.position_call_end.get("bar").unwrap();
+        assert_eq!(bar_positions.len(), 1, "bar() 被重复收集了，实际次数: {}", bar_positions.len());
+    }
+
+    //深层嵌套
+    #[test]
+    fn test_deep_nested_call_duplicate_debug() {
+        let code = r#"
+#mudu_proc#
+def main():
+    foo(bar(baz()))
+"#;
+
+        let context = parse_ok(code);
+
+        println!("=== position_call_end ===");
+        for (name, positions) in &context.position_call_end {
+            println!("{} -> {} times", name, positions.len());
+        }
+
+        let foo_count = context.position_call_end.get("foo").unwrap().len();
+        let bar_count = context.position_call_end.get("bar").unwrap().len();
+        let baz_count = context.position_call_end.get("baz").unwrap().len();
+
+        assert_eq!(foo_count, 1, "foo 被重复收集，实际: {}", foo_count);
+        assert_eq!(bar_count, 1, "bar 被重复收集，实际: {}", bar_count);
+        assert_eq!(baz_count, 1, "baz 被重复收集，实际: {}", baz_count);
+    }
+
+    //同级多次调用
+    #[test]
+    fn test_sibling_calls_should_be_counted_normally() {
+        let code = r#"
+#mudu_proc#
+def main():
+    foo(bar(), bar())
+"#;
+
+        let context = parse_ok(code);
+
+        println!("=== position_call_end ===");
+        for (name, positions) in &context.position_call_end {
+            println!("{} -> {} times", name, positions.len());
+        }
+
+        let foo_count = context.position_call_end.get("foo").unwrap().len();
+        let bar_count = context.position_call_end.get("bar").unwrap().len();
+
+        // foo 出现一次
+        assert_eq!(foo_count, 1, "foo 被重复收集，实际: {}", foo_count);
+        // bar 在源码里本来就有两个，应该是 2
+        assert_eq!(bar_count, 2, "bar 计数不对，实际: {}", bar_count);
+    }
+
+}

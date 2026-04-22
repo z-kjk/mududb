@@ -1,3 +1,5 @@
+//! python.ver
+//! 没有包含import重构
 use crate::python::function::PyFunction;
 use crate::python::tymplate_proc::{ArgumentInfo, ProcedureInfo, ReturnInfo, TemplateProc};
 use askama::Template;
@@ -29,13 +31,39 @@ pub struct ParseContext {
     pub position_call_end: HashMap<String, Vec<(Position, bool)>>,
     pub position_def_start: HashMap<String, (Position, bool)>,
     pub mudu_procedure: HashMap<String, PyFunction>,
-    pub position_refactor_use: Vec<UseRefactor>,
+    // pub position_refactor_use: Vec<UseRefactor>,
     pub lines: Vec<String>,
-    pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
+    // pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
 }
 
 
 impl ParseContext {
+
+    //简洁版，没有重构import模块
+    pub fn new(text: String) -> Self {
+        let mut sys_call = HashSet::new();
+        sys_call.insert("mudu_query".to_string());
+        sys_call.insert("mudu_command".to_string());
+        sys_call.insert("mudu_open".to_string());
+        sys_call.insert("mudu_close".to_string());
+        sys_call.insert("mudu_get".to_string());
+        sys_call.insert("mudu_put".to_string());
+        sys_call.insert("mudu_range".to_string());
+
+        let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+
+        Self {
+            text,
+            sys_call,
+            call_dependencies: Default::default(),
+            position_call_end: Default::default(),
+            position_def_start: Default::default(),
+            mudu_procedure: Default::default(),
+            lines,
+        }
+    }
+
+
     pub fn node_text(&self, node: &Node) -> RS<String> {
         let s = node
             .utf8_text(self.text.as_bytes())
@@ -79,7 +107,11 @@ impl ParseContext {
 
 }
 
-#[derive(Debug, Clone)]
+fn mod_path_to_vec(s: &str) -> Vec<String> {
+    s.split('.').map(|x| x.to_string()).collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Position {
     pub row: usize,
     pub col: usize,

@@ -20,7 +20,7 @@ const MUDU_PROC_MARKER: &str = "#mudu_proc#";
 
 pub struct PythonParser {}
 
-fn rust_language() -> Language {
+fn python_language() -> Language {
     tree_sitter_python::LANGUAGE.into()
 }
 
@@ -43,7 +43,7 @@ impl PythonParser {
 
     pub fn parse(context: &mut ParseContext) -> RS<()> {
         let mut parser = Parser::new();
-        parser.set_language(&rust_language()).unwrap();
+        parser.set_language(&python_language()).unwrap();
         let tree = parser.parse(&context.text, None).unwrap();
         let node = tree.root_node();
         let parser = Self::new();
@@ -76,17 +76,19 @@ impl PythonParser {
         Ok(())
     }
 
-    //todo 不知道是否要看是否适配
     fn is_mudu_proc(&self, context: &ParseContext, function_item_start_row: usize) -> bool {
-        if context.lines.len() < function_item_start_row {
-            panic!("row index out of bounds");
+        if function_item_start_row == 0 {
+            return false;
         }
-        for i in 1..function_item_start_row {
-            let line = &context.lines[function_item_start_row - i];
-            let line_trim = line.trim();
+        if function_item_start_row > context.lines.len() {
+            return false;
+        }
+        for row in (0..function_item_start_row).rev() { //从0开始，减1
+            let line_trim = context.lines[row].trim(); //处理空格缩进、空行以便准确判断
             if line_trim == MUDU_PROC_MARKER {
                 return true;
-            } else if !line_trim.is_empty() {
+            }
+            if !line_trim.is_empty() { //避免其他代码，无效判定
                 return false;
             }
         }
@@ -137,14 +139,17 @@ impl PythonParser {
             let vec_parameters = self.visit_parameters(context, parameters)?;
             let opt_return_type = crate::python::python_parser::opt_child_field(&node, ts_const::ts_field_name::RETURN_TYPE);
             let opt_ret_python_type = match opt_return_type {
-                Some(return_type) => Some(self.visit_type(context, return_type)?),
+                Some(return_type) => {
+                    Some(self.visit_type(context, return_type)?)
+                }
                 _ => None,
             };
+
             let function = crate::python::function::PyFunction {
                 name: function_name.clone(),
                 arg_list: vec_parameters,
                 return_type: opt_ret_python_type,
-                is_async: false,
+                is_async: contains_async,
             };
             context
                 .mudu_procedure
@@ -202,6 +207,9 @@ impl PythonParser {
 
             ts_const::ts_kind_name::S_IDENTIFIER => { //基本类型
                 let type_name = context.node_text(&node)?;
+                if type_name == "None" {
+                    return Ok(PythonType::NoneType); // 专门处理 -> None
+                }
                 Ok(self.ident_to_python_type(type_name))
             }
 
@@ -213,6 +221,8 @@ impl PythonParser {
                     _ => Ok(PythonType::Generic(name, args)),
                 }
             }
+            //none判断，但是待定
+            ts_const::ts_kind_name::S_NONE => Ok(PythonType::NoneType),
 
             _ => {
                 let kind = node.kind();
@@ -235,7 +245,7 @@ impl PythonParser {
             _ => PythonType::Custom(name),
         }
     }
-    
+
     ///解析泛型类型
     fn visit_generic_type(
         &self,
@@ -417,4 +427,335 @@ fn expected_child_field<'tree>(node: &Node<'tree>, field: &str) -> RS<Node<'tree
 //field可能存在，也可能没有，没有就返回None
 fn opt_child_field<'tree>(node: &Node<'tree>, field: &str) -> Option<Node<'tree>> {
     node.child_by_field_name(field)
+}
+
+
+#[cfg(test)]
+mod test_mudu_proc_signature {
+    use super::*;
+    use crate::python::python_type::PythonType;
+
+    // ────────────────────────────────────────────────
+    // 辅助：从代码字符串解析出 ParseContext
+    // ────────────────────────────────────────────────
+    fn parse_ok(code: &str) -> ParseContext {
+        let mut ctx = ParseContext::new(code.to_string());
+        crate::python::python_parser::PythonParser::parse(&mut ctx)
+            .expect("parse failed");
+        ctx
+    }
+
+
+    // ────────────────────────────────────────────────
+    // 1. 最简单：无参数，无返回值
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_no_param_no_return() {
+        let code = r#"
+#mudu_proc#
+def main():
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("main").expect("main not found");
+
+        println!("name: {}", f.name);
+        println!("arg_list: {:?}", f.arg_list);
+        println!("return_type: {:?}", f.return_type);
+        println!("is_async: {}", f.is_async);
+
+        assert_eq!(f.name, "main");
+        assert!(f.arg_list.is_empty());
+        assert_eq!(f.return_type, None);
+        assert!(!f.is_async);
+    }
+
+    // ────────────────────────────────────────────────
+    // 2. async 函数
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_async_flag() {
+        let code = r#"
+#mudu_proc#
+async def fetch():
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("fetch").expect("fetch not found");
+
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert!(f.is_async, "应该是 async 函数");
+    }
+
+    // ────────────────────────────────────────────────
+    // 3. 基本类型参数
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_primitive_params() {
+        let code = r#"
+#mudu_proc#
+def add(x: int, y: float, name: str, flag: bool, data: bytes):
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("add").expect("add not found");
+
+        let expected: Vec<(&str, PythonType)> = vec![
+            ("x",    PythonType::Primitive("int".to_string())),
+            ("y",    PythonType::Primitive("float".to_string())),
+            ("name", PythonType::Primitive("str".to_string())),
+            ("flag", PythonType::Primitive("bool".to_string())),
+            ("data", PythonType::Primitive("bytes".to_string())),
+        ];
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(f.arg_list.len(), expected.len());
+        for (i, (exp_name, exp_ty)) in expected.iter().enumerate() {
+            assert_eq!(&f.arg_list[i].0, exp_name);
+            assert_eq!(&f.arg_list[i].1, exp_ty);
+        }
+    }
+
+    // ────────────────────────────────────────────────
+    // 4. 自定义类型参数
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_custom_type_param() {
+        let code = r#"
+#mudu_proc#
+def create(req: CreateRequest):
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("create").expect("create not found");
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(f.arg_list.len(), 1);
+        assert_eq!(f.arg_list[0].0, "req");
+        assert_eq!(f.arg_list[0].1, PythonType::Custom("CreateRequest".to_string()));
+    }
+
+    // ────────────────────────────────────────────────
+    // 5. 泛型参数 List / Optional
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_generic_list_param() {
+        let code = r#"
+#mudu_proc#
+def process(items: List[int]):
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("process").expect("process not found");
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(f.arg_list.len(), 1);
+        assert_eq!(
+            f.arg_list[0].1,
+            PythonType::Generic(
+                "List".to_string(),
+                vec![PythonType::Primitive("int".to_string())]
+            )
+        );
+    }
+
+    // ────────────────────────────────────────────────
+    // 6. 返回值 —— 基本类型
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_return_primitive() {
+        let code = r#"
+#mudu_proc#
+def get_count() -> int:
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("get_count").expect("get_count not found");
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(
+            f.return_type,
+            Some(PythonType::Primitive("int".to_string()))
+        );
+    }
+
+    // ────────────────────────────────────────────────
+    // 7. 返回值 —— None
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_return_none_type() {
+        let code = r#"
+#mudu_proc#
+def do_something() -> None:
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("do_something").expect("not found");
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(f.return_type, Some(PythonType::NoneType));
+    }
+
+    // ────────────────────────────────────────────────
+    // 8. 返回值 —— Tuple
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_return_tuple() {
+        let code = r#"
+#mudu_proc#
+def query() -> tuple[int, str]:
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("query").expect("not found");
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(
+            f.return_type,
+            Some(PythonType::Tuple(vec![
+                PythonType::Primitive("int".to_string()),
+                PythonType::Primitive("str".to_string()),
+            ]))
+        );
+    }
+
+    // ────────────────────────────────────────────────
+    // 9. 没有 #mudu_proc# 标注的函数，不应该出现在 mudu_procedure 里
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_non_mudu_proc_not_collected() {
+        let code = r#"
+def helper():
+    pass
+
+#mudu_proc#
+def entry():
+    pass
+"#;
+        let ctx = parse_ok(code);
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert!(
+            ctx.mudu_procedure.get("helper").is_none(),
+            "helper 没有 #mudu_proc# 标注，不应该被收集"
+        );
+        assert!(
+            ctx.mudu_procedure.get("entry").is_some(),
+            "entry 有 #mudu_proc# 标注，应该被收集"
+        );
+    }
+
+    // ────────────────────────────────────────────────
+    // 10. 多个 mudu_proc 函数同时存在
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_multiple_mudu_proc() {
+        let code = r#"
+#mudu_proc#
+def foo(a: int) -> str:
+    pass
+
+#mudu_proc#
+def bar(b: str) -> int:
+    pass
+"#;
+        let ctx = parse_ok(code);
+
+        assert_eq!(ctx.mudu_procedure.len(), 2);
+
+        let foo = ctx.mudu_procedure.get("foo").expect("foo not found");
+        assert_eq!(foo.arg_list[0].0, "a");
+        assert_eq!(foo.arg_list[0].1, PythonType::Primitive("int".to_string()));
+        assert_eq!(foo.return_type, Some(PythonType::Primitive("str".to_string())));
+
+        let bar = ctx.mudu_procedure.get("bar").expect("bar not found");
+        assert_eq!(bar.arg_list[0].0, "b");
+        assert_eq!(bar.arg_list[0].1, PythonType::Primitive("str".to_string()));
+        assert_eq!(bar.return_type, Some(PythonType::Primitive("int".to_string())));
+    }
+
+    // ────────────────────────────────────────────────
+    // 11. self 参数（类方法场景）不影响签名解析
+    // ────────────────────────────────────────────────
+    #[test]
+    fn test_self_param_parsed() {
+        let code = r#"
+#mudu_proc#
+def method(self, x: int):
+    pass
+"#;
+        let ctx = parse_ok(code);
+        let f = ctx.mudu_procedure.get("method").expect("not found");
+
+        // self 没有类型注解，visit_parameters 只收集 typed_parameter
+        // 所以 arg_list 里只有 x
+
+        println!("=== mudu_procedure ===");
+        for (name, f) in &ctx.mudu_procedure {
+            println!(
+                "{} | async={} | args={:?} | ret={:?}",
+                name, f.is_async, f.arg_list, f.return_type
+            );
+        }
+
+        assert_eq!(f.arg_list.len(), 1);
+        assert_eq!(f.arg_list[0].0, "x");
+    }
 }
