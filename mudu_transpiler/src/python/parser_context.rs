@@ -1,5 +1,5 @@
 //! python.ver
-//! 没有包含import重构
+//! 4.27 添加了import的定义以及构建方法
 use crate::python::function::PyFunction;
 use crate::python::tymplate_proc::{ArgumentInfo, ProcedureInfo, ReturnInfo, TemplateProc};
 use askama::Template;
@@ -31,16 +31,16 @@ pub struct ParseContext {
     pub position_call_end: HashMap<String, Vec<(Position, bool)>>,
     pub position_def_start: HashMap<String, (Position, bool)>,
     pub mudu_procedure: HashMap<String, PyFunction>,
-    // pub position_refactor_use: Vec<UseRefactor>,
+    pub position_refactor_use: Vec<UseRefactor>, //import版本
     pub lines: Vec<String>,
-    // pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
+    pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
 }
 
 
 impl ParseContext {
 
-    //简洁版，没有重构import模块
-    pub fn new(text: String) -> Self {
+    ///加了重构版
+    pub fn new(text: String, src_mod: Option<String>, dst_mod: Option<String>) -> Self {
         let mut sys_call = HashSet::new();
         sys_call.insert("mudu_query".to_string());
         sys_call.insert("mudu_command".to_string());
@@ -52,6 +52,20 @@ impl ParseContext {
 
         let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
 
+        let refactor_src_dst_mod = if let Some(src) = src_mod
+            && let Some(dst) = dst_mod
+        {
+            let src_path = mod_path_to_vec(&src);
+            let dst_path = mod_path_to_vec(&dst);
+            if src_path == dst_path || src_path.len() != dst_path.len() {
+                None
+            } else {
+                Some((src_path, dst_path))
+            }
+        } else {
+            None
+        };
+
         Self {
             text,
             sys_call,
@@ -59,7 +73,9 @@ impl ParseContext {
             position_call_end: Default::default(),
             position_def_start: Default::default(),
             mudu_procedure: Default::default(),
+            position_refactor_use: Default::default(),
             lines,
+            refactor_src_dst_mod,
         }
     }
 

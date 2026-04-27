@@ -15,5 +15,13 @@ pub const S_ARGUMENT_LIST: &str = "argument_list";
 pub const S_STRING: &str = "string";
 pub const S_ASYNC: &str = "async";
 pub const S_DEF: &str = "def";
+pub const S_IMPORT_STATEMENT: &str = "import_statement";
 
+pub const S_DOTTED_NAME: &str = "dotted_name";
+pub const S_ALIASED_IMPORT: &str = "aliased_import";
+pub const S_IMPORT: &str = "import";
+pub const S_IMPORT_FROM_STATEMENT: &str = "import_from_statement";
+pub const S_IMPORT_FROM: &str = "import_from";
+pub const S_FROM: &str = "from";
+pub const S_WILDCARD_IMPORT: &str = "wildcard_import";
 pub const S_NONE: &str = "none";

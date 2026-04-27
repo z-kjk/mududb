@@ -1,8 +1,9 @@
 //! python_parser.rs
-//! 第一版最小可运行骨架：
+//! 第二版运行
 //! - 提取 function_definition
 //! - 提取参数 typed_parameter
 //! - 提取 call
+//! -- import语句记录
 //! - 提取 attribute 调用名
 
 use crate::python::parser_context::{ParseContext, Position, UseRefactor};
@@ -61,7 +62,9 @@ impl PythonParser {
         for (_, child) in node.children(&mut cursor).enumerate() {
             let kind = child.kind();
             match kind {
-                //todo 缺个import(应该）
+                ts_const::ts_kind_name::S_IMPORT_STATEMENT =>{
+                    self.visit_import_statement(context, child)?;
+                }
                 ts_const::ts_kind_name::S_FUNCTION_DEFINITION  => {
                     self.visit_function_definition(context, child)?;
                 }
@@ -102,6 +105,205 @@ impl PythonParser {
     ) -> RS<()>{
         Ok(())
     }
+
+    fn visit_import_statement(
+        &self,
+        context: &mut ParseContext,
+        node: Node,
+    ) -> RS<()> {
+        let (stack, src, dst) = match &context.refactor_src_dst_mod {
+            Some((src, dst)) => {
+                let mut stack = Vec::new();
+                self.visit_import_statement_inner(context, node, &mut stack, None)?;
+                if stack.is_empty() {
+                    return Ok(());
+                }
+                (stack, src.clone(), dst.clone())
+            }
+            None => return Ok(()),
+        };
+        let path_list = self.build_path_list(&stack);
+        for path in path_list {
+            self.refactor_use_mod(context, &path, &src, &dst)?;
+        }
+        Ok(())
+    }
+
+    fn visit_import_statement_inner(
+        &self,
+        context: &ParseContext,
+        node: Node,
+        stack: &mut Vec<HashMap<String, (Option<String>, Position, Position)>>,
+        parent: Option<String>,
+    ) -> RS<()> {
+        match node.kind() {
+            // import foo.bar as api → 只取第一个子节点(dotted_name/identifier)，忽略 as + alias
+            ts_const::ts_kind_name::S_ALIASED_IMPORT => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        ts_const::ts_kind_name::S_DOTTED_NAME | ts_const::ts_kind_name::S_IDENTIFIER => {
+                            self.visit_import_statement_inner(context, child, stack, parent)?;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // foo.bar.baz → 按 identifier 逐层压 stack
+            ts_const::ts_kind_name::S_DOTTED_NAME => {
+                let mut cursor = node.walk();
+                let mut current_parent = parent;
+                for child in node.children(&mut cursor) {
+                    if child.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                        let name = context.node_text(&child)?;
+                        let start = Position::from_ts(child.start_position());
+                        let end = Position::from_ts(child.end_position());
+                        let mut map = HashMap::new();
+                        map.insert(name.clone(), (current_parent.clone(), start, end));
+                        stack.push(map);
+                        current_parent = Some(name);
+                    }
+                }
+            }
+            // from foo.bar import A, B
+            ts_const::ts_kind_name::S_IMPORT_FROM_STATEMENT => {
+                let mut cursor = node.walk();
+                let mut passed_import = false;
+                let mut prefix_last: Option<String> = None;
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        ts_const::ts_kind_name::S_FROM | ts_const::ts_kind_name::S_WILDCARD_IMPORT => {}
+                        ts_const::ts_kind_name::S_IMPORT => {
+                            passed_import = true;
+                            // 记录 from 部分最后一段，作为 import names 的 parent
+                            prefix_last = stack.last().and_then(|m| m.keys().next().cloned());
+                        }
+                        _ => {
+                            if !passed_import {
+                                // from 部分：dotted_name 逐层压 stack
+                                self.visit_import_statement_inner(context, child, stack, None)?;
+                            } else {
+                                // import 部分：同层插入 stack 最后一层
+                                // 处理 aliased_import 时只取原始名
+                                let target = if child.kind() == ts_const::ts_kind_name::S_ALIASED_IMPORT {
+                                    let mut cursor = child.walk();
+                                    child.children(&mut cursor).find(|c| {
+                                        c.kind() == ts_const::ts_kind_name::S_IDENTIFIER || c.kind() == ts_const::ts_kind_name::S_DOTTED_NAME
+                                    })
+                                } else {
+                                    Some(child)
+                                };
+                                if let Some(target_node) = target {
+                                    if target_node.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                        let name = context.node_text(&target_node)?;
+                                        let start = Position::from_ts(target_node.start_position());
+                                        let end = Position::from_ts(target_node.end_position());
+                                        if let Some(last) = stack.last_mut() {
+                                            last.insert(name, (prefix_last.clone(), start, end));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // import_statement → 跳过 "import" 关键字，递归处理子节点
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() != ts_const::ts_kind_name::S_IMPORT {
+                        self.visit_import_statement_inner(context, child, stack, parent.clone())?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    //用栈还原完整路径列表
+    fn build_path_list(
+        &self,
+        stack: &Vec<HashMap<String, (Option<String>, Position, Position)>>,
+    ) -> Vec<Vec<(String, Position, Position)>> {
+        let opt = stack.last();
+        let mut ret = Vec::new();
+        if let Some(map) = opt {
+            for (name, (opt_parent, start, end)) in map.iter() {
+                let mut vec = Vec::new();
+                let name = name.clone();
+                let start = start.clone();
+                let end = end.clone();
+                vec.push((name, start, end));
+                let mut i = stack.len() - 1;
+                let mut opt_parent = opt_parent.clone();
+                while i >= 1 {
+                    match &opt_parent {
+                        Some(parent) => {
+                            let parent_level = &stack[i - 1];
+                            let opt = parent_level.get(parent);
+                            if let Some((opt_p, s, e)) = opt {
+                                vec.push((parent.clone(), s.clone(), e.clone()));
+                                opt_parent = opt_p.clone()
+                            }
+                            i -= 1;
+                        }
+                        _ => {
+                            break;
+                        }
+                    }
+                }
+                vec.reverse();
+                ret.push(vec)
+            }
+        }
+        ret
+    }
+
+    //用src/dst匹配路径，记录需要替换的位置
+    fn refactor_use_mod(
+        &self,
+        context: &mut ParseContext,
+        path: &Vec<(String, Position, Position)>,
+        src: &Vec<String>,
+        dst: &Vec<String>,
+    ) -> RS<()> {
+        if src.len() != dst.len() {
+            panic!(
+                "cannot possible src len ({}) != dst len ({})",
+                src.len(),
+                dst.len()
+            );
+        }
+        let mut i = 0;
+        let mut j = 0;
+        let mut matches = Vec::new();
+        while i < path.len() && j < dst.len() {
+            let (path_i_str, start_pos, end_pos) = &path[i];
+            let path_j_str = &src[j];
+            if path_i_str == path_j_str {
+                i += 1;
+                j += 1;
+                matches.push((path_i_str.clone(), start_pos.clone(), end_pos.clone()));
+            } else {
+                i += 1;
+                j = 0;
+                matches.clear()
+            }
+        }
+        if matches.len() == src.len() {
+            for (i, (_, start_position, end_position)) in matches.into_iter().enumerate() {
+                context.position_refactor_use.push(UseRefactor {
+                    start_position,
+                    end_position,
+                    src_string: src[i].to_string(),
+                    dst_string: dst[i].to_string(),
+                })
+            }
+        }
+        Ok(())
+    }
     //函数定义
     ///负责
     /// 从function中提取name,parameters(parser_parameters),return_type,body
@@ -131,10 +333,10 @@ impl PythonParser {
         let function_name = context.node_text(&name_node)?;
         if let Some(pos) = def_start_pos {
             context
-                .position_def_start
+                .position_def_start     //所有函数都记录
                 .insert(function_name.clone(), (pos, contains_async));
         }
-        if is_mudu_proc {
+        if is_mudu_proc { //带##的记录到mudu_procedure中
             let parameters = expected_child_field(&node, ts_const::ts_field_name::PARAMETERS)?;
             let vec_parameters = self.visit_parameters(context, parameters)?;
             let opt_return_type = crate::python::python_parser::opt_child_field(&node, ts_const::ts_field_name::RETURN_TYPE);
@@ -303,9 +505,12 @@ impl PythonParser {
         //遍历收集结果
         if let Some(caller) = opt_function_name {
             for (identifier, arguments) in call_chains.iter() {
+                //记录调用依赖关系
                 context.add_call_dependency(caller, &identifier.name);
 
+                //判断是否是系统调用
                 let is_sys_call = context.is_sys_call(&identifier.name);
+                //记录调用结束位置
                 context.add_func_call_end_position(
                     identifier.name.clone(),
                     arguments.end_position.clone(),
@@ -429,333 +634,141 @@ fn opt_child_field<'tree>(node: &Node<'tree>, field: &str) -> Option<Node<'tree>
     node.child_by_field_name(field)
 }
 
-
 #[cfg(test)]
-mod test_mudu_proc_signature {
+mod test_import_refactor {
     use super::*;
-    use crate::python::python_type::PythonType;
 
-    // ────────────────────────────────────────────────
-    // 辅助：从代码字符串解析出 ParseContext
-    // ────────────────────────────────────────────────
-    fn parse_ok(code: &str) -> ParseContext {
-        let mut ctx = ParseContext::new(code.to_string());
+    fn parse_refactor(code: &str, src: &str, dst: &str) -> ParseContext {
+        let mut ctx = ParseContext::new(
+            code.to_string(),
+            Some(src.to_string()),
+            Some(dst.to_string()),
+        );
         crate::python::python_parser::PythonParser::parse(&mut ctx)
             .expect("parse failed");
         ctx
     }
 
-
-    // ────────────────────────────────────────────────
-    // 1. 最简单：无参数，无返回值
-    // ────────────────────────────────────────────────
+    //按照rust的逻辑，记录两次
+    // ── import foo.bar ──────────────────────────────
     #[test]
-    fn test_no_param_no_return() {
-        let code = r#"
-#mudu_proc#
-def main():
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("main").expect("main not found");
+    fn test_import_simple() {
+        let code = "import sys_interface.sync_api";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-        println!("name: {}", f.name);
-        println!("arg_list: {:?}", f.arg_list);
-        println!("return_type: {:?}", f.return_type);
-        println!("is_async: {}", f.is_async);
+        // dotted_name 每个 identifier 各记录一条
+        assert_eq!(ctx.position_refactor_use.len(), 2);
 
-        assert_eq!(f.name, "main");
-        assert!(f.arg_list.is_empty());
-        assert_eq!(f.return_type, None);
-        assert!(!f.is_async);
+        // 找到 sync_api 那条
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
+        assert_eq!(r.dst_string, "new_api");
+
+        // sys_interface 那条也存在
+        let r2 = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sys_interface")
+            .expect("sys_interface not found");
+        assert_eq!(r2.dst_string, "sys_interface");
     }
 
-    // ────────────────────────────────────────────────
-    // 2. async 函数
-    // ────────────────────────────────────────────────
+    // ── import foo.bar as alias ─────────────────────
     #[test]
-    fn test_async_flag() {
-        let code = r#"
-#mudu_proc#
-async def fetch():
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("fetch").expect("fetch not found");
+    fn test_import_aliased() {
+        let code = "import sys_interface.sync_api as api";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert!(f.is_async, "应该是 async 函数");
+        assert_eq!(ctx.position_refactor_use.len(), 2);
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
+        assert_eq!(r.dst_string, "new_api");
     }
 
-    // ────────────────────────────────────────────────
-    // 3. 基本类型参数
-    // ────────────────────────────────────────────────
+    // ── from foo.bar import A ───────────────────────
     #[test]
-    fn test_primitive_params() {
-        let code = r#"
-#mudu_proc#
-def add(x: int, y: float, name: str, flag: bool, data: bytes):
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("add").expect("add not found");
+    fn test_from_import_single() {
+        let code = "from sys_interface.sync_api import QueryResult";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-        let expected: Vec<(&str, PythonType)> = vec![
-            ("x",    PythonType::Primitive("int".to_string())),
-            ("y",    PythonType::Primitive("float".to_string())),
-            ("name", PythonType::Primitive("str".to_string())),
-            ("flag", PythonType::Primitive("bool".to_string())),
-            ("data", PythonType::Primitive("bytes".to_string())),
-        ];
-
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(f.arg_list.len(), expected.len());
-        for (i, (exp_name, exp_ty)) in expected.iter().enumerate() {
-            assert_eq!(&f.arg_list[i].0, exp_name);
-            assert_eq!(&f.arg_list[i].1, exp_ty);
-        }
+        assert_eq!(ctx.position_refactor_use.len(), 2);
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
+        assert_eq!(r.dst_string, "new_api");
     }
 
-    // ────────────────────────────────────────────────
-    // 4. 自定义类型参数
-    // ────────────────────────────────────────────────
+    // ── from foo.bar import A, B ────────────────────
     #[test]
-    fn test_custom_type_param() {
-        let code = r#"
-#mudu_proc#
-def create(req: CreateRequest):
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("create").expect("create not found");
+    fn test_from_import_multi() {
+        let code = "from sys_interface.sync_api import QueryResult, CommandResult";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(f.arg_list.len(), 1);
-        assert_eq!(f.arg_list[0].0, "req");
-        assert_eq!(f.arg_list[0].1, PythonType::Custom("CreateRequest".to_string()));
+        assert_eq!(ctx.position_refactor_use.len(), 2);
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
+        assert_eq!(r.dst_string, "new_api");
     }
 
-    // ────────────────────────────────────────────────
-    // 5. 泛型参数 List / Optional
-    // ────────────────────────────────────────────────
+    // ── from foo.bar import A as X ──────────────────
     #[test]
-    fn test_generic_list_param() {
-        let code = r#"
-#mudu_proc#
-def process(items: List[int]):
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("process").expect("process not found");
+    fn test_from_import_aliased_name() {
+        let code = "from sys_interface.sync_api import QueryResult as QR";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(f.arg_list.len(), 1);
-        assert_eq!(
-            f.arg_list[0].1,
-            PythonType::Generic(
-                "List".to_string(),
-                vec![PythonType::Primitive("int".to_string())]
-            )
-        );
+        assert_eq!(ctx.position_refactor_use.len(), 2);
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
+        assert_eq!(r.dst_string, "new_api");
     }
 
-    // ────────────────────────────────────────────────
-    // 6. 返回值 —— 基本类型
-    // ────────────────────────────────────────────────
+    // ── 路径不匹配，不产生记录 ──────────────────────
     #[test]
-    fn test_return_primitive() {
-        let code = r#"
-#mudu_proc#
-def get_count() -> int:
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("get_count").expect("get_count not found");
+    fn test_no_match() {
+        let code = "import sys_interface.sync_api";
+        let ctx = parse_refactor(code, "sys_interface.other", "sys_interface.new_api");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(
-            f.return_type,
-            Some(PythonType::Primitive("int".to_string()))
-        );
+        assert_eq!(ctx.position_refactor_use.len(), 0);
     }
 
-    // ────────────────────────────────────────────────
-    // 7. 返回值 —— None
-    // ────────────────────────────────────────────────
+    // ── src == dst，ParseContext::new 置 None ───────
     #[test]
-    fn test_return_none_type() {
-        let code = r#"
-#mudu_proc#
-def do_something() -> None:
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("do_something").expect("not found");
+    fn test_src_eq_dst() {
+        let code = "import sys_interface.sync_api";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.sync_api");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(f.return_type, Some(PythonType::NoneType));
+        assert!(ctx.refactor_src_dst_mod.is_none());
+        assert_eq!(ctx.position_refactor_use.len(), 0);
     }
 
-    // ────────────────────────────────────────────────
-    // 8. 返回值 —— Tuple
-    // ────────────────────────────────────────────────
+    // ── src/dst 长度不同，ParseContext::new 置 None ─
     #[test]
-    fn test_return_tuple() {
-        let code = r#"
-#mudu_proc#
-def query() -> tuple[int, str]:
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("query").expect("not found");
+    fn test_len_mismatch() {
+        let code = "import sys_interface.sync_api";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "new_api");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(
-            f.return_type,
-            Some(PythonType::Tuple(vec![
-                PythonType::Primitive("int".to_string()),
-                PythonType::Primitive("str".to_string()),
-            ]))
-        );
+        assert!(ctx.refactor_src_dst_mod.is_none());
+        assert_eq!(ctx.position_refactor_use.len(), 0);
     }
 
-    // ────────────────────────────────────────────────
-    // 9. 没有 #mudu_proc# 标注的函数，不应该出现在 mudu_procedure 里
-    // ────────────────────────────────────────────────
+    // ── 验证 position 是否正确 ──────────────────────
     #[test]
-    fn test_non_mudu_proc_not_collected() {
-        let code = r#"
-def helper():
-    pass
+    fn test_position() {
+        //        0         1         2
+        //        012345678901234567890123456789
+        let code = "import sys_interface.sync_api";
+        let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-#mudu_proc#
-def entry():
-    pass
-"#;
-        let ctx = parse_ok(code);
+        // 精确找 sync_api 那条
+        let r = ctx.position_refactor_use.iter()
+            .find(|r| r.src_string == "sync_api")
+            .expect("sync_api not found");
 
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert!(
-            ctx.mudu_procedure.get("helper").is_none(),
-            "helper 没有 #mudu_proc# 标注，不应该被收集"
-        );
-        assert!(
-            ctx.mudu_procedure.get("entry").is_some(),
-            "entry 有 #mudu_proc# 标注，应该被收集"
-        );
-    }
-
-    // ────────────────────────────────────────────────
-    // 10. 多个 mudu_proc 函数同时存在
-    // ────────────────────────────────────────────────
-    #[test]
-    fn test_multiple_mudu_proc() {
-        let code = r#"
-#mudu_proc#
-def foo(a: int) -> str:
-    pass
-
-#mudu_proc#
-def bar(b: str) -> int:
-    pass
-"#;
-        let ctx = parse_ok(code);
-
-        assert_eq!(ctx.mudu_procedure.len(), 2);
-
-        let foo = ctx.mudu_procedure.get("foo").expect("foo not found");
-        assert_eq!(foo.arg_list[0].0, "a");
-        assert_eq!(foo.arg_list[0].1, PythonType::Primitive("int".to_string()));
-        assert_eq!(foo.return_type, Some(PythonType::Primitive("str".to_string())));
-
-        let bar = ctx.mudu_procedure.get("bar").expect("bar not found");
-        assert_eq!(bar.arg_list[0].0, "b");
-        assert_eq!(bar.arg_list[0].1, PythonType::Primitive("str".to_string()));
-        assert_eq!(bar.return_type, Some(PythonType::Primitive("int".to_string())));
-    }
-
-    // ────────────────────────────────────────────────
-    // 11. self 参数（类方法场景）不影响签名解析
-    // ────────────────────────────────────────────────
-    #[test]
-    fn test_self_param_parsed() {
-        let code = r#"
-#mudu_proc#
-def method(self, x: int):
-    pass
-"#;
-        let ctx = parse_ok(code);
-        let f = ctx.mudu_procedure.get("method").expect("not found");
-
-        // self 没有类型注解，visit_parameters 只收集 typed_parameter
-        // 所以 arg_list 里只有 x
-
-        println!("=== mudu_procedure ===");
-        for (name, f) in &ctx.mudu_procedure {
-            println!(
-                "{} | async={} | args={:?} | ret={:?}",
-                name, f.is_async, f.arg_list, f.return_type
-            );
-        }
-
-        assert_eq!(f.arg_list.len(), 1);
-        assert_eq!(f.arg_list[0].0, "x");
+        assert_eq!(r.start_position.row, 0);
+        assert_eq!(r.start_position.col, 21);
+        assert_eq!(r.end_position.row, 0);
+        assert_eq!(r.end_position.col, 29);
     }
 }
