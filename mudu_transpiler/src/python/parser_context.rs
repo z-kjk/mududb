@@ -1,5 +1,6 @@
 //! python.ver
 //! 4.27 添加了import的定义以及构建方法
+//! 4.30 增加了tran_to_async函数
 use crate::python::function::PyFunction;
 use crate::python::tymplate_proc::{ArgumentInfo, ProcedureInfo, ReturnInfo, TemplateProc};
 use askama::Template;
@@ -33,7 +34,7 @@ pub struct ParseContext {
     pub mudu_procedure: HashMap<String, PyFunction>,
     pub position_refactor_use: Vec<UseRefactor>, //import版本
     pub lines: Vec<String>,
-    pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>,
+    pub refactor_src_dst_mod: Option<(Vec<String>, Vec<String>)>, //用来干啥的？
 }
 
 
@@ -119,6 +120,91 @@ impl ParseContext {
             self.call_dependencies.insert(callee.to_string(), caller_set);
         }
     }
+
+    ///v2添加
+    pub fn tran_to_async(&mut self) {
+        // 种子：sys_call 是已知的异步函数（如 mudu_open 等）
+        let mut callees: HashSet<String> = self.sys_call.clone();
+        let mut callers: HashSet<String> = HashSet::default();
+
+        // 暂时移出避免借用冲突
+        let mut position_def_start = std::mem::take(&mut self.position_def_start);
+        let mut position_call_end = std::mem::take(&mut self.position_call_end);
+
+        // 不动点循环
+        while !callees.is_empty() || !callers.is_empty() {
+            self.update_async_await_walk_dependency(
+                &mut callers,
+                &mut callees,
+                &mut position_def_start,
+                &mut position_call_end,
+            );
+        }
+
+        // 写回
+        self.position_def_start = position_def_start;
+        self.position_call_end = position_call_end;
+    }
+
+    fn get_caller_of_callee(&self, callee: &String) -> Option<&HashSet<String>> {
+        self.call_dependencies.get(callee)
+    }
+
+    pub fn update_async_await_walk_dependency(
+        &self,
+        callers: &mut HashSet<String>,
+        callees: &mut HashSet<String>,
+        position_def_start: &mut HashMap<String, (Position, bool)>,
+        position_call_end: &mut HashMap<String, Vec<(Position, bool)>>,
+    ) {
+        for callee in callees.iter() {
+            self.mark_all_async_caller(callee, callers, position_def_start);
+        }
+        callees.clear();
+
+        for caller in callers.iter() {
+            self.mark_all_async_callee(caller, callees, position_call_end);
+        }
+        callers.clear();
+    }
+
+    pub fn mark_all_async_caller(
+        &self,
+        callee: &String,
+        callers: &mut HashSet<String>,
+        position_def_start: &mut HashMap<String, (Position, bool)>,
+    ) {
+        let _set = HashSet::default();
+        // ↓ 唯一变化：字段名从 position_fn_start 改为 position_def_start
+        let set = self.call_dependencies.get(callee).unwrap_or(&_set);
+        for caller in set {
+            if let Some((_pos, is_async)) = position_def_start.get_mut(caller) {
+                if !*is_async {
+                    *is_async = true;
+                    callers.insert(caller.clone());
+                }
+            }
+            // 递归 DFS 向上继续扩散
+            self.mark_all_async_caller(caller, callers, position_def_start);
+        }
+    }
+
+    pub fn mark_all_async_callee(
+        &self,
+        caller: &String,
+        callees: &mut HashSet<String>,
+        position_call_end: &mut HashMap<String, Vec<(Position, bool)>>,
+    ) {
+        let mut _vec = Vec::new();
+        let vec = position_call_end.get_mut(caller).unwrap_or(&mut _vec);
+        for (_, is_async) in vec.iter_mut() {
+            if !*is_async {
+                *is_async = true;
+                callees.insert(caller.clone());
+            }
+        }
+    }
+
 
 
 }

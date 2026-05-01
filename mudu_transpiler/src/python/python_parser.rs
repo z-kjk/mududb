@@ -58,11 +58,15 @@ impl PythonParser {
         node: Node,
         opt_function_name: Option<&str>,
     ) -> RS<()> {
+
         let mut cursor = node.walk();
         for (_, child) in node.children(&mut cursor).enumerate() {
             let kind = child.kind();
             match kind {
-                ts_const::ts_kind_name::S_IMPORT_STATEMENT =>{
+                ts_const::ts_kind_name::S_IMPORT_STATEMENT | ts_const::ts_kind_name::S_IMPORT_FROM_STATEMENT=>{
+                    //测试
+                    eprintln!("[DEBUG] 准备调用 visit_import_statement, node.kind()={}", node.kind());
+
                     self.visit_import_statement(context, child)?;
                 }
                 ts_const::ts_kind_name::S_FUNCTION_DEFINITION  => {
@@ -79,6 +83,7 @@ impl PythonParser {
         Ok(())
     }
 
+    ///todo 记录一下
     fn is_mudu_proc(&self, context: &ParseContext, function_item_start_row: usize) -> bool {
         if function_item_start_row == 0 {
             return false;
@@ -111,21 +116,49 @@ impl PythonParser {
         context: &mut ParseContext,
         node: Node,
     ) -> RS<()> {
+        //是否被调用
+        eprintln!("[DEBUG] visit_import_statement 被调用, node.kind()={}", node.kind());
+
         let (stack, src, dst) = match &context.refactor_src_dst_mod {
             Some((src, dst)) => {
+
+                eprintln!("[DEBUG] refactor_src_dst_mod = Some(src={:?}, dst={:?})", src, dst); // ★
+
                 let mut stack = Vec::new();
-                self.visit_import_statement_inner(context, node, &mut stack, None)?;
+                self.visit_import_statement_inner(context, node, &mut stack, None)?; //填充栈
                 if stack.is_empty() {
                     return Ok(());
                 }
                 (stack, src.clone(), dst.clone())
             }
-            None => return Ok(()),
+            None =>{
+                eprintln!("[DEBUG] refactor_src_dst_mod = None, 直接返回"); // ★
+                return Ok(())
+            }
+
         };
+        // ★ 第一个观察点：visit_import_statement_inner 跑完后 stack 是什么
+        eprintln!("[DEBUG] stack 构建完毕，共 {} 层:", stack.len());
+        for (i, layer) in stack.iter().enumerate() {
+            for (name, (parent, _, _)) in layer.iter() {
+                eprintln!("  stack[{}]: name={:?}  parent={:?}", i, name, parent);
+            }
+        }
         let path_list = self.build_path_list(&stack);
+
+        // ★ 第二个观察点：build_path_list 返回了什么
+        eprintln!("[DEBUG] build_path_list 返回 {} 条路径:", path_list.len());
+        for path in &path_list {
+            eprintln!("  path = {:?}", path);
+        }
+
         for path in path_list {
             self.refactor_use_mod(context, &path, &src, &dst)?;
         }
+
+        // ★ 第三个观察点：最终结果
+        eprintln!("[DEBUG] position_refactor_use 共 {} 条", context.position_refactor_use.len());
+
         Ok(())
     }
 
@@ -161,7 +194,7 @@ impl PythonParser {
                         let end = Position::from_ts(child.end_position());
                         let mut map = HashMap::new();
                         map.insert(name.clone(), (current_parent.clone(), start, end));
-                        stack.push(map);
+                        stack.push(map); //dotted_name下入栈
                         current_parent = Some(name);
                     }
                 }
@@ -170,42 +203,104 @@ impl PythonParser {
             ts_const::ts_kind_name::S_IMPORT_FROM_STATEMENT => {
                 let mut cursor = node.walk();
                 let mut passed_import = false;
-                let mut prefix_last: Option<String> = None;
+                // 单独收集 from 部分的路径段，顺序列表
+                let mut prefix_path: Vec<(String, Position, Position)> = Vec::new();
                 for child in node.children(&mut cursor) {
                     match child.kind() {
-                        ts_const::ts_kind_name::S_FROM | ts_const::ts_kind_name::S_WILDCARD_IMPORT => {}
+                        ts_const::ts_kind_name::S_FROM | ts_const::ts_kind_name::S_WILDCARD_IMPORT => {} //跳过
                         ts_const::ts_kind_name::S_IMPORT => {
                             passed_import = true;
-                            // 记录 from 部分最后一段，作为 import names 的 parent
-                            prefix_last = stack.last().and_then(|m| m.keys().next().cloned());
                         }
                         _ => {
-                            if !passed_import {
-                                // from 部分：dotted_name 逐层压 stack
-                                self.visit_import_statement_inner(context, child, stack, None)?;
+                            if !passed_import { //还没遇到import
+                                // from 部分：收集 dotted_name 里每个 identifier
+                                if child.kind() == ts_const::ts_kind_name::S_DOTTED_NAME || child.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                    let mut c2 = child.walk();
+                                    for seg in child.children(&mut c2) {
+                                        if seg.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                            let name = context.node_text(&seg)?;
+                                            let start = Position::from_ts(seg.start_position());
+                                            let end = Position::from_ts(seg.end_position());
+                                            prefix_path.push((name, start, end));
+                                        }
+                                    }
+                                    // 如果 child 本身就是 identifier（无点路径）
+                                    if child.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                        let name = context.node_text(&child)?;
+                                        let start = Position::from_ts(child.start_position());
+                                        let end = Position::from_ts(child.end_position());
+                                        prefix_path.push((name, start, end));
+                                    }
+                                }
                             } else {
-                                // import 部分：同层插入 stack 最后一层
-                                // 处理 aliased_import 时只取原始名
+                                // import 部分：每个 imported name 拼上 prefix_path，
+                                // 形成一条完整路径直接推进 stack（单层 HashMap）
                                 let target = if child.kind() == ts_const::ts_kind_name::S_ALIASED_IMPORT {
-                                    let mut cursor = child.walk();
-                                    child.children(&mut cursor).find(|c| {
+                                    let mut c2 = child.walk();
+                                    child.children(&mut c2).find(|c| {
+                                        c.kind() == ts_const::ts_kind_name::S_IDENTIFIER || c.kind() == ts_const::ts_kind_name::S_DOTTED_NAME
+                                    })
+                                } else if child.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                    Some(child)
+                                } else if child.kind() == ts_const::ts_kind_name::S_DOTTED_NAME{ //添加了dotted_name的判断，但不知道是否正确
+                                    let mut c2 = child.walk();
+                                    child.children(&mut c2).find(|c| {
                                         c.kind() == ts_const::ts_kind_name::S_IDENTIFIER || c.kind() == ts_const::ts_kind_name::S_DOTTED_NAME
                                     })
                                 } else {
-                                    Some(child)
+                                    None
                                 };
+
                                 if let Some(target_node) = target {
-                                    if target_node.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
-                                        let name = context.node_text(&target_node)?;
-                                        let start = Position::from_ts(target_node.start_position());
-                                        let end = Position::from_ts(target_node.end_position());
-                                        if let Some(last) = stack.last_mut() {
-                                            last.insert(name, (prefix_last.clone(), start, end));
+                                    // 如果是 dotted_name，取它的第一个 identifier 子节点
+                                    let resolved_node = if target_node.kind() == ts_const::ts_kind_name::S_DOTTED_NAME {
+                                        let mut c3 = target_node.walk();
+                                        target_node.children(&mut c3).find(|c| c.kind() == ts_const::ts_kind_name::S_IDENTIFIER)
+                                    } else if target_node.kind() == ts_const::ts_kind_name::S_IDENTIFIER {
+                                        Some(target_node)
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(resolved) = resolved_node {
+                                        let name = context.node_text(&resolved)?;
+                                        let start = Position::from_ts(resolved.start_position());
+                                        let end = Position::from_ts(resolved.end_position());
+
+                                        // 把 prefix_path + name 组成一条完整路径压进 stack
+                                        let mut local_stack: Vec<HashMap<String, (Option<String>, Position, Position)>> = Vec::new();
+                                        let mut prev: Option<String> = None;
+                                        for (seg_name, seg_start, seg_end) in &prefix_path {
+                                            let mut map = HashMap::new();
+                                            map.insert(seg_name.clone(), (prev.clone(), seg_start.clone(), seg_end.clone()));
+                                            local_stack.push(map);
+                                            prev = Some(seg_name.clone());
+                                        }
+                                        // 最后加上 import 的名字
+                                        let mut map = HashMap::new();
+                                        map.insert(name, (prev, start, end));
+                                        local_stack.push(map);
+
+                                        // 合并进全局 stack（追加层）
+                                        for (i, layer) in local_stack.into_iter().enumerate() {
+                                            if i < stack.len() {
+                                                stack[i].extend(layer);
+                                            } else {
+                                                stack.push(layer);
+                                            }
                                         }
                                     }
+
                                 }
                             }
                         }
+                    }
+                }
+                //测试输出
+                eprintln!("[DEBUG] import_from_statement 处理完毕，stack 共 {} 层:", stack.len());
+                for (i, layer) in stack.iter().enumerate() {
+                    for (name, (parent, _, _)) in layer.iter() {
+                        eprintln!("  stack[{}]: name={:?}  parent={:?}", i, name, parent);
                     }
                 }
             }
@@ -213,7 +308,7 @@ impl PythonParser {
             _ => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    if child.kind() != ts_const::ts_kind_name::S_IMPORT {
+                    if child.kind() != ts_const::ts_kind_name::S_IMPORT { //跳过import
                         self.visit_import_statement_inner(context, child, stack, parent.clone())?;
                     }
                 }
@@ -269,6 +364,12 @@ impl PythonParser {
         src: &Vec<String>,
         dst: &Vec<String>,
     ) -> RS<()> {
+        // ★ 观察点1：看传进来的 path 和 src/dst 是什么
+        eprintln!("[DEBUG] refactor_use_mod 调用:");
+        eprintln!("  src = {:?}", src);
+        eprintln!("  dst = {:?}", dst);
+        eprintln!("  path = {:?}", path.iter().map(|(n,_,_)| n).collect::<Vec<_>>());
+
         if src.len() != dst.len() {
             panic!(
                 "cannot possible src len ({}) != dst len ({})",
@@ -282,6 +383,10 @@ impl PythonParser {
         while i < path.len() && j < dst.len() {
             let (path_i_str, start_pos, end_pos) = &path[i];
             let path_j_str = &src[j];
+
+            // ★ 观察点2：看每一步匹配过程
+            eprintln!("[DEBUG] 比较 path[{}]={:?}  src[{}]={:?}  => {}",
+                      i, path_i_str, j, path_j_str, path_i_str == path_j_str);
             if path_i_str == path_j_str {
                 i += 1;
                 j += 1;
@@ -292,6 +397,11 @@ impl PythonParser {
                 matches.clear()
             }
         }
+
+        // ★ 观察点3：看最终 matches 结果
+        eprintln!("[DEBUG] matches.len()={} src.len()={}", matches.len(), src.len());
+        eprintln!("  matches = {:?}", matches.iter().map(|(n,_,_)| n).collect::<Vec<_>>());
+
         if matches.len() == src.len() {
             for (i, (_, start_position, end_position)) in matches.into_iter().enumerate() {
                 context.position_refactor_use.push(UseRefactor {
@@ -646,6 +756,10 @@ mod test_import_refactor {
         );
         crate::python::python_parser::PythonParser::parse(&mut ctx)
             .expect("parse failed");
+
+        eprintln!("[DEBUG] parse_refactor: src={:?} dst={:?}", src, dst);
+        eprintln!("[DEBUG] refactor_src_dst_mod = {:?}", ctx.refactor_src_dst_mod);
+
         ctx
     }
 
@@ -704,7 +818,7 @@ mod test_import_refactor {
         let code = "from sys_interface.sync_api import QueryResult, CommandResult";
         let ctx = parse_refactor(code, "sys_interface.sync_api", "sys_interface.new_api");
 
-        assert_eq!(ctx.position_refactor_use.len(), 2);
+        assert_eq!(ctx.position_refactor_use.len(), 4);
         let r = ctx.position_refactor_use.iter()
             .find(|r| r.src_string == "sync_api")
             .expect("sync_api not found");
